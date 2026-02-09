@@ -5,9 +5,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 TOKEN = os.getenv("BOT_TOKEN")
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 Привет! Это тестовый battle-бот.\n\nКоманды:\n/start — начать"
-    )
+    await update.message.reply_text("Бот запущен и работает 🚀")
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
