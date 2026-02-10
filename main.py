@@ -1,44 +1,29 @@
 import os
 import json
+import asyncio
 from collections import defaultdict
-from telegram import (
-    Update,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton
-)
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes
-)
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
 
+# ===== НАСТРОЙКИ =====
 TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL = "battlertf"
 STATE_FILE = "state.json"
-
-ROUND_TIME = 60 * 15  # 15 минут
+ROUND_TIME = 15 * 60  # 15 минут
 
 # ===== СОСТОЯНИЕ =====
 STATE = {
     "round": 0,
     "active": False,
     "participants": [],
-    "posts": {},
-    "votes": {}
+    "posts": {},      # user_id -> message_id
+    "votes": {}       # message_id -> [user_id]
 }
 
 # ===== SAVE / LOAD =====
 def save_state():
-    data = {
-        "round": STATE["round"],
-        "active": STATE["active"],
-        "participants": STATE["participants"],
-        "posts": STATE["posts"],
-        "votes": {k: list(v) for k, v in STATE["votes"].items()}
-    }
     with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+        json.dump(STATE, f, ensure_ascii=False, indent=2)
 
 def load_state():
     if not os.path.exists(STATE_FILE):
@@ -46,19 +31,13 @@ def load_state():
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-            STATE["round"] = data.get("round", 0)
-            STATE["active"] = data.get("active", False)
-            STATE["participants"] = data.get("participants", [])
-            STATE["posts"] = data.get("posts", {})
-            STATE["votes"] = defaultdict(set, {
-                int(k): set(v) for k, v in data.get("votes", {}).items()
-            })
+            STATE.update(data)
     except Exception:
-        print("⚠️ Не удалось загрузить state.json")
+        print("⚠️ Ошибка загрузки state.json")
 
-# ===== START =====
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    kb = InlineKeyboardMarkup([
+# ===== INLINE МЕНЮ =====
+def main_menu():
+    return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("⚔️ Участвовать", callback_data="join"),
             InlineKeyboardButton("📜 Правила", callback_data="rules")
@@ -67,56 +46,73 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             InlineKeyboardButton("🔍 Найти себя", callback_data="find_me")
         ]
     ])
+
+# ===== /start =====
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🔥 Битва Ников\n\nНажми кнопку ниже 👇",
-        reply_markup=kb
+        "🔥 *Добро пожаловать в Битву Ников!*\n\n"
+        "Турнир проходит в канале:\n"
+        f"👉 https://t.me/{CHANNEL}\n\n"
+        "Используй кнопки ниже 👇",
+        reply_markup=main_menu(),
+        parse_mode="Markdown"
     )
 
-# ===== RULES =====
+# ===== ПРАВИЛА =====
 async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     await update.callback_query.message.reply_text(
-        "📜 ПРАВИЛА\n\n"
-        "• Участники могут добавляться в любой момент\n"
-        "• Раунды автоматические\n"
-        "• 1 пользователь = 1 голос\n"
-        "• Проигравшие ждут следующий турнир\n"
+        "📜 *ПРАВИЛА БИТВЫ НИКОВ*\n\n"
+        "⚔️ *Формат турнира*\n"
+        "• Участники могут присоединяться даже во время раунда\n"
+        "• Раунды запускаются автоматически\n"
+        "• Один раунд = ограниченное время\n\n"
+        "🗳 *Голосование*\n"
+        "• 1 пользователь = 1 голос за участника\n"
+        "• Повторное голосование запрещено\n"
+        "• Накрутка не поощряется\n\n"
+        "🏆 *Победа*\n"
+        "• После каждого раунда часть игроков выбывает\n"
         "• 4–5 раунд — редкость\n"
-        "• В финале только 1 победитель\n\n"
-        "🔐 Конфиденциальность игроков полностью защищена."
+        "• В финале ВСЕГДА только 1 победитель\n\n"
+        "⛔ *Важно*\n"
+        "• Проигравшие ждут следующий турнир\n"
+        "• Награды выдаются вручную администратором\n\n"
+        "🔐 *Конфиденциальность*\n"
+        "• Бот не передаёт личные данные\n"
+        "• Используются только ID и никнеймы\n"
+        "• Все данные защищены",
+        parse_mode="Markdown"
     )
 
-# ===== JOIN =====
+# ===== УЧАСТИЕ =====
 async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     uid = q.from_user.id
 
     if uid in STATE["participants"]:
-        await q.answer("Ты уже участвуешь", show_alert=True)
+        await q.answer("Ты уже участвуешь!", show_alert=True)
         return
 
     STATE["participants"].append(uid)
     save_state()
+    await q.answer("Ты участвуешь!")
 
-    await q.answer("Ты в битве!")
-
-    if not STATE["active"]:
+    if not STATE["active"] and len(STATE["participants"]) >= 2:
         asyncio.create_task(start_round(context))
 
-# ===== START ROUND =====
+# ===== СТАРТ РАУНДА =====
 async def start_round(context):
-    if len(STATE["participants"]) < 2:
-        return
-
     STATE["active"] = True
     STATE["round"] += 1
-    STATE["votes"] = defaultdict(set)
-    STATE["posts"].clear()
+    STATE["votes"] = {}
+    STATE["posts"] = {}
     save_state()
 
     await context.bot.send_message(
         chat_id=f"@{CHANNEL}",
-        text=f"⚔️ Раунд {STATE['round']} начинается!"
+        text=f"⚔️ *Раунд {STATE['round']} начался!*",
+        parse_mode="Markdown"
     )
 
     for uid in STATE["participants"]:
@@ -124,27 +120,28 @@ async def start_round(context):
         msg = await context.bot.send_message(
             chat_id=f"@{CHANNEL}",
             text=f"⚔️ Раунд {STATE['round']}\n@{user.username or user.first_name}",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("👍 Проголосовать", callback_data=f"vote:{uid}")
-            ]])
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("👍 Проголосовать", callback_data=f"vote:{uid}")]
+            ])
         )
-        STATE["posts"][uid] = msg.message_id
+        STATE["posts"][str(uid)] = msg.message_id
+        STATE["votes"][str(msg.message_id)] = []
 
     save_state()
     await asyncio.sleep(ROUND_TIME)
     await end_round(context)
 
-# ===== END ROUND =====
+# ===== КОНЕЦ РАУНДА =====
 async def end_round(context):
     scores = []
+
     for uid, msg_id in STATE["posts"].items():
-        scores.append((uid, len(STATE["votes"].get(msg_id, []))))
+        votes = len(STATE["votes"].get(str(msg_id), []))
+        scores.append((int(uid), votes))
 
     scores.sort(key=lambda x: x[1], reverse=True)
-    winners = scores[:max(1, len(scores)//2)]
-
-    STATE["participants"] = [uid for uid, _ in winners]
-    STATE["posts"].clear()
+    survivors = scores[:max(1, len(scores)//2)]
+    STATE["participants"] = [uid for uid, _ in survivors]
     save_state()
 
     await context.bot.send_message(
@@ -156,47 +153,44 @@ async def end_round(context):
         user = await context.bot.get_chat(STATE["participants"][0])
         await context.bot.send_message(
             chat_id=f"@{CHANNEL}",
-            text=f"🏆 ПОБЕДИТЕЛЬ\n@{user.username or user.first_name}"
+            text=f"🏆 *ПОБЕДИТЕЛЬ ТУРНИРА*\n@{user.username or user.first_name}",
+            parse_mode="Markdown"
         )
-        STATE["active"] = False
-        STATE["participants"].clear()
+        STATE.update({"round": 0, "active": False, "participants": []})
         save_state()
         return
 
     asyncio.create_task(start_round(context))
 
-# ===== VOTE =====
+# ===== ГОЛОС =====
 async def vote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    uid = q.from_user.id
-    msg_id = q.message.message_id
+    voter = q.from_user.id
+    msg_id = str(q.message.message_id)
 
-    if uid in STATE["votes"].get(msg_id, set()):
+    if voter in STATE["votes"].get(msg_id, []):
         await q.answer("Ты уже голосовал", show_alert=True)
         return
 
-    STATE["votes"].setdefault(msg_id, set()).add(uid)
+    STATE["votes"][msg_id].append(voter)
     save_state()
-    await q.answer("Голос засчитан 👍")
+    await q.answer("Голос принят 👍")
 
-# ===== FIND ME =====
+# ===== НАЙТИ СЕБЯ =====
 async def find_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    uid = q.from_user.id
+    uid = str(q.from_user.id)
 
     msg_id = STATE["posts"].get(uid)
     if not msg_id:
-        await q.answer("Ты сейчас не в раунде", show_alert=True)
+        await q.answer("Ты сейчас не участвуешь", show_alert=True)
         return
 
     await q.message.reply_text(
-        "🔍 Твоя битва:",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton(
-                "➡️ Перейти",
-                url=f"https://t.me/{CHANNEL}/{msg_id}"
-            )
-        ]])
+        "🔍 Твой пост:",
+        reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton("➡️ Перейти к битве", url=f"https://t.me/{CHANNEL}/{msg_id}")]
+        ])
     )
     await q.answer()
 
