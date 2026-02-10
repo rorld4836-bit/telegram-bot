@@ -1,3 +1,4 @@
+import os
 import random
 from telegram import Update
 from telegram.ext import (
@@ -6,8 +7,12 @@ from telegram.ext import (
     ContextTypes,
 )
 
-# 🔑 ТОКЕН
-TOKEN = "ТВОЙ_ТОКЕН_ОТ_BOTFATHER"
+# 🔐 ТОКЕН ИЗ RAILWAY VARIABLES
+TOKEN = os.getenv("BOT_TOKEN")
+
+if not TOKEN:
+    raise ValueError("❌ BOT_TOKEN не найден. Добавь его в Railway Variables.")
+
 
 # ====== ДАННЫЕ В ПАМЯТИ ======
 players = set()
@@ -19,7 +24,7 @@ battle_active = False
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет!\n"
-        "Это 🤖 Battle Bot — битва ников ⚔️\n\n"
+        "⚔️ Бритва Ников — битва участников\n\n"
         "Команды:\n"
         "/join — участвовать\n"
         "/battle — начать битву\n"
@@ -29,24 +34,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "📘 Доступные команды:\n"
+        "📘 Команды бота:\n"
         "/start — запуск\n"
-        "/join — участвовать\n"
-        "/battle — начать битву\n"
-        "/ping — проверить бота\n"
-        "/about — о боте"
+        "/join — участие\n"
+        "/battle — битва\n"
+        "/ping — проверка\n"
+        "/about — о проекте"
     )
 
 
 async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🏓 Pong! Бот работает.")
+    await update.message.reply_text("🏓 Pong! Бот онлайн.")
 
 
 async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 Battle Bot\n"
-        "Версия 1.0\n"
-        "Работает на Railway 🚀"
+        "🤖 Бритва Ников\n"
+        "⚔️ Турнирный бот\n"
+        "🚀 Работает на Railway"
     )
 
 
@@ -54,18 +59,22 @@ async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global battle_active
 
     if battle_active:
-        await update.message.reply_text("⚠️ Битва уже идёт. Жди следующую.")
+        await update.message.reply_text("⏳ Битва уже идёт. Жди следующий раунд.")
         return
 
     user = update.effective_user.username
     if not user:
-        await update.message.reply_text("❌ У тебя нет username в Telegram.")
+        await update.message.reply_text("❌ Нужен username в Telegram.")
+        return
+
+    if user in players:
+        await update.message.reply_text("ℹ️ Ты уже участвуешь.")
         return
 
     players.add(user)
     await update.message.reply_text(
-        f"✅ @{user} присоединился!\n"
-        f"👥 Участников: {len(players)}"
+        f"✅ @{user} участвует!\n"
+        f"👥 Всего: {len(players)}"
     )
 
 
@@ -95,12 +104,12 @@ async def battle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🥇 @{winner}"
     )
 
-    # сброс
+    # 🔄 СБРОС
     players.clear()
     battle_active = False
 
 
-# ====== ЗАПУСК БОТА ======
+# ====== ЗАПУСК ======
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
@@ -112,7 +121,7 @@ def main():
     app.add_handler(CommandHandler("join", join))
     app.add_handler(CommandHandler("battle", battle))
 
-    print("🤖 Battle Bot запущен")
+    print("🤖 Бритва Ников запущена")
     app.run_polling()
 
 
