@@ -1,129 +1,116 @@
-import os
-import random
-from telegram import Update
+import logging
+import time
+from collections import defaultdict
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
+)
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
-    ContextTypes,
+    CallbackQueryHandler,
+    ContextTypes
 )
 
-# 🔐 ТОКЕН ИЗ RAILWAY VARIABLES
-TOKEN = os.getenv("BOT_TOKEN")
+# ================== НАСТРОЙКИ ==================
+TOKEN = "ВСТАВЬ_СЮДА_ТОКЕН"
+BATTLE_CHANNEL_LINK = "https://t.me/battlertf"
 
-if not TOKEN:
-    raise ValueError("❌ BOT_TOKEN не найден. Добавь его в Railway Variables.")
+ROUNDS = {
+    1: 5,
+    2: 10,
+    3: 15,
+    4: 25,
+    5: 27  # редкий раунд с тай-брейком
+}
 
+ROUND_TIME = 14 * 60 * 60  # 14 часов
+# ==============================================
 
-# ====== ДАННЫЕ В ПАМЯТИ ======
-players = set()
-battle_active = False
+logging.basicConfig(level=logging.INFO)
 
+users = {}
+referrals = defaultdict(int)
+round_start_time = {}
+round_reach_time = {}  # для тай-брейка 5 раунда
 
-# ====== КОМАНДЫ ======
-
+# ================== КОМАНДЫ ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+
+    if user_id not in users:
+        users[user_id] = {"round": 1}
+
+    keyboard = [
+        [InlineKeyboardButton("⚔️ Участвовать", callback_data="join")],
+        [InlineKeyboardButton("📜 Правила", callback_data="rules")]
+    ]
+
     await update.message.reply_text(
-        "👋 Привет!\n"
-        "⚔️ Бритва Ников — битва участников\n\n"
-        "Команды:\n"
-        "/join — участвовать\n"
-        "/battle — начать битву\n"
-        "/help — помощь"
+        "🔥 *Битва Ников*\n\nГотов доказать силу своего ника?",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown"
     )
 
-
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📘 Команды бота:\n"
-        "/start — запуск\n"
-        "/join — участие\n"
-        "/battle — битва\n"
-        "/ping — проверка\n"
-        "/about — о проекте"
+async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    await update.callback_query.message.reply_text(
+        "📜 *Правила*\n\n"
+        "• Участие бесплатное\n"
+        "• Проигравшие не вылетают\n"
+        "• Побеждает тот, кто наберёт нужное число приглашений\n"
+        "• В 5 раунде возможен тай-брейк\n"
+        "• Награды выдаются вручную\n"
+        "• Накрутка запрещена\n",
+        parse_mode="Markdown"
     )
-
-
-async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🏓 Pong! Бот онлайн.")
-
-
-async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🤖 Бритва Ников\n"
-        "⚔️ Турнирный бот\n"
-        "🚀 Работает на Railway"
-    )
-
 
 async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global battle_active
+    query = update.callback_query
+    user_id = query.from_user.id
 
-    if battle_active:
-        await update.message.reply_text("⏳ Битва уже идёт. Жди следующий раунд.")
-        return
+    ref_link = f"https://t.me/{context.bot.username}?start={user_id}"
 
-    user = update.effective_user.username
-    if not user:
-        await update.message.reply_text("❌ Нужен username в Telegram.")
-        return
+    keyboard = [
+        [InlineKeyboardButton("⚔️ Перейти в канал битв", url=BATTLE_CHANNEL_LINK)],
+        [InlineKeyboardButton("📨 Пригласить", url=f"https://t.me/share/url?url={ref_link}")]
+    ]
 
-    if user in players:
-        await update.message.reply_text("ℹ️ Ты уже участвуешь.")
-        return
-
-    players.add(user)
-    await update.message.reply_text(
-        f"✅ @{user} участвует!\n"
-        f"👥 Всего: {len(players)}"
+    await query.answer()
+    await query.message.reply_text(
+        f"✅ Ты в битве!\n\n"
+        f"🔗 Твоя ссылка для приглашений:\n{ref_link}",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
+# ================== РЕФЕРАЛЫ ==================
+async def referral_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+    user_id = update.effective_user.id
 
-async def battle(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global battle_active, players
+    if args:
+        referrer = int(args[0])
+        if user_id != referrer:
+            referrals[referrer] += 1
 
-    if battle_active:
-        await update.message.reply_text("⚔️ Битва уже идёт!")
-        return
+            # фиксируем время достижения лимита ТОЛЬКО для 5 раунда
+            if users.get(referrer, {}).get("round") == 5:
+                if referrer not in round_reach_time:
+                    round_reach_time[referrer] = time.time()
 
-    if len(players) < 2:
-        await update.message.reply_text("❌ Нужно минимум 2 участника.")
-        return
+    await start(update, context)
 
-    battle_active = True
-
-    await update.message.reply_text(
-        "🔥 БИТВА НИКОВ НАЧАЛАСЬ!\n\n"
-        "Участники:\n" +
-        "\n".join(f"@{p}" for p in players)
-    )
-
-    winner = random.choice(list(players))
-
-    await update.message.reply_text(
-        f"🏆 ПОБЕДИТЕЛЬ:\n"
-        f"🥇 @{winner}"
-    )
-
-    # 🔄 СБРОС
-    players.clear()
-    battle_active = False
-
-
-# ====== ЗАПУСК ======
-
+# ================== ЗАПУСК ==================
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CommandHandler("ping", ping))
-    app.add_handler(CommandHandler("about", about))
-    app.add_handler(CommandHandler("join", join))
-    app.add_handler(CommandHandler("battle", battle))
+    app.add_handler(CommandHandler("start", referral_start))
+    app.add_handler(CallbackQueryHandler(join, pattern="join"))
+    app.add_handler(CallbackQueryHandler(rules, pattern="rules"))
 
-    print("🤖 Бритва Ников запущена")
+    print("🤖 Бот запущен")
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
