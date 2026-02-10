@@ -1,3 +1,4 @@
+import os
 import logging
 import time
 from collections import defaultdict
@@ -14,7 +15,11 @@ from telegram.ext import (
 )
 
 # ================== НАСТРОЙКИ ==================
-TOKEN = "ВСТАВЬ_СЮДА_ТОКЕН"
+TOKEN = os.getenv("BOT_TOKEN")
+
+if not TOKEN:
+    raise RuntimeError("BOT_TOKEN не найден в Variables")
+
 BATTLE_CHANNEL_LINK = "https://t.me/battlertf"
 
 ROUNDS = {
@@ -25,15 +30,14 @@ ROUNDS = {
     5: 27  # редкий раунд с тай-брейком
 }
 
-ROUND_TIME = 14 * 60 * 60  # 14 часов
+ROUND_TIME = 14 * 60 * 60
 # ==============================================
 
 logging.basicConfig(level=logging.INFO)
 
 users = {}
 referrals = defaultdict(int)
-round_start_time = {}
-round_reach_time = {}  # для тай-брейка 5 раунда
+round_reach_time = {}
 
 # ================== КОМАНДЫ ==================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -59,10 +63,9 @@ async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📜 *Правила*\n\n"
         "• Участие бесплатное\n"
         "• Проигравшие не вылетают\n"
-        "• Побеждает тот, кто наберёт нужное число приглашений\n"
         "• В 5 раунде возможен тай-брейк\n"
         "• Награды выдаются вручную\n"
-        "• Накрутка запрещена\n",
+        "• Накрутка запрещена",
         parse_mode="Markdown"
     )
 
@@ -79,8 +82,8 @@ async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.answer()
     await query.message.reply_text(
-        f"✅ Ты в битве!\n\n"
-        f"🔗 Твоя ссылка для приглашений:\n{ref_link}",
+        f"✅ Ты участвуешь!\n\n"
+        f"🔗 Твоя реферальная ссылка:\n{ref_link}",
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
@@ -94,7 +97,6 @@ async def referral_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if user_id != referrer:
             referrals[referrer] += 1
 
-            # фиксируем время достижения лимита ТОЛЬКО для 5 раунда
             if users.get(referrer, {}).get("round") == 5:
                 if referrer not in round_reach_time:
                     round_reach_time[referrer] = time.time()
