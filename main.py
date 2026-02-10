@@ -1,4 +1,3 @@
-import asyncio
 import random
 from telegram import Update
 from telegram.ext import (
@@ -7,9 +6,10 @@ from telegram.ext import (
     ContextTypes,
 )
 
+# 🔑 ТОКЕН
 TOKEN = "ТВОЙ_ТОКЕН_ОТ_BOTFATHER"
 
-# ====== ХРАНИЛИЩЕ ДАННЫХ (пока в памяти) ======
+# ====== ДАННЫЕ В ПАМЯТИ ======
 players = set()
 battle_active = False
 
@@ -21,7 +21,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "👋 Привет!\n"
         "Это 🤖 Battle Bot — битва ников ⚔️\n\n"
         "Команды:\n"
-        "/join — войти в битву\n"
+        "/join — участвовать\n"
         "/battle — начать битву\n"
         "/help — помощь"
     )
@@ -29,9 +29,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "📘 Команды бота:\n"
+        "📘 Доступные команды:\n"
         "/start — запуск\n"
-        "/join — участвовать в битве\n"
+        "/join — участвовать\n"
         "/battle — начать битву\n"
         "/ping — проверить бота\n"
         "/about — о боте"
@@ -39,22 +39,22 @@ async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🏓 Pong! Бот жив.")
+    await update.message.reply_text("🏓 Pong! Бот работает.")
 
 
 async def about(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 Battle Bot\n"
-        "Первая версия\n"
-        "Запущен на Railway 🚀"
+        "Версия 1.0\n"
+        "Работает на Railway 🚀"
     )
 
 
 async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global players, battle_active
+    global battle_active
 
     if battle_active:
-        await update.message.reply_text("⚠️ Битва уже идёт. Подожди следующую.")
+        await update.message.reply_text("⚠️ Битва уже идёт. Жди следующую.")
         return
 
     user = update.effective_user.username
@@ -64,13 +64,13 @@ async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     players.add(user)
     await update.message.reply_text(
-        f"✅ @{user} вошёл в битву!\n"
+        f"✅ @{user} присоединился!\n"
         f"👥 Участников: {len(players)}"
     )
 
 
 async def battle(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global players, battle_active
+    global battle_active, players
 
     if battle_active:
         await update.message.reply_text("⚔️ Битва уже идёт!")
@@ -83,11 +83,10 @@ async def battle(update: Update, context: ContextTypes.DEFAULT_TYPE):
     battle_active = True
 
     await update.message.reply_text(
-        "🔥 БИТВА НИКОВ НАЧАЛАСЬ!\n"
-        f"Участники: {', '.join('@' + p for p in players)}"
+        "🔥 БИТВА НИКОВ НАЧАЛАСЬ!\n\n"
+        "Участники:\n" +
+        "\n".join(f"@{p}" for p in players)
     )
-
-    await asyncio.sleep(2)
 
     winner = random.choice(list(players))
 
@@ -96,14 +95,14 @@ async def battle(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🥇 @{winner}"
     )
 
-    # Сброс
+    # сброс
     players.clear()
     battle_active = False
 
 
-# ====== ЗАПУСК ======
+# ====== ЗАПУСК БОТА ======
 
-async def main():
+def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
@@ -114,8 +113,8 @@ async def main():
     app.add_handler(CommandHandler("battle", battle))
 
     print("🤖 Battle Bot запущен")
-    await app.run_polling()
+    app.run_polling()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
