@@ -1,6 +1,5 @@
 import os
 import json
-import asyncio
 from collections import defaultdict
 from telegram import (
     Update,
