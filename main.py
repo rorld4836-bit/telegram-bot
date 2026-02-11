@@ -18,17 +18,17 @@ from telegram.ext import (
 TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL = "battlertf"
 STATE_FILE = "state.json"
-ROUND_TIME = 15 * 60  # 15 минут
-MIN_PARTICIPANTS = 2  # Минимальное количество участников для старта
+ROUND_TIME = 15 * 60
+MIN_PARTICIPANTS = 2
 
 # ===== СОСТОЯНИЕ =====
 STATE = {
     "round": 0,
     "active": False,
     "participants": [],
-    "posts": {},      # user_id -> message_id
-    "votes": {},      # message_id -> [user_id]
-    "user_data": {},  # user_id -> { 'votes': 0, 'invites': 0, 'wins': 0, 'referrals': [] }
+    "posts": {},
+    "votes": {},
+    "user_data": {}
 }
 
 # ===== SAVE / LOAD =====
@@ -41,12 +41,11 @@ def load_state():
         return
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            STATE.update(data)
-    except Exception:
-        print("⚠️ Ошибка загрузки state.json")
+            STATE.update(json.load(f))
+    except:
+        print("Ошибка загрузки")
 
-# ===== INLINE МЕНЮ =====
+# ===== МЕНЮ =====
 def main_menu():
     return InlineKeyboardMarkup([
         [
@@ -59,12 +58,38 @@ def main_menu():
         ]
     ])
 
-# ===== /start =====
+# ===== /start + РЕФЕРАЛЫ =====
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    uid = user.id
+
+    # Инициализация профиля
+    if uid not in STATE["user_data"]:
+        STATE["user_data"][uid] = {
+            "votes": 0,
+            "invites": 0,
+            "wins": 0,
+            "referrals": []
+        }
+
+    # Обработка реферала
+    if context.args:
+        referrer_id = context.args[0]
+
+        if referrer_id.isdigit():
+            referrer_id = int(referrer_id)
+
+            if referrer_id != uid:  # нельзя пригласить себя
+                if uid not in STATE["user_data"][referrer_id]["referrals"]:
+                    STATE["user_data"][referrer_id]["invites"] += 1
+                    STATE["user_data"][referrer_id]["referrals"].append(uid)
+                    save_state()
+
+    save_state()
+
     await update.message.reply_text(
         "🔥 *Добро пожаловать в Битву Ников!*\n\n"
-        "Турнир проходит в канале:\n"
-        f"👉 https://t.me/{CHANNEL}\n\n"
+        f"Турнир проходит в канале:\n👉 https://t.me/{CHANNEL}\n\n"
         "Используй кнопки ниже 👇",
         reply_markup=main_menu(),
         parse_mode="Markdown"
@@ -97,179 +122,35 @@ async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-# ===== УЧАСТИЕ =====
-async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    uid = q.from_user.id
-
-    if uid in STATE["participants"]:
-        await q.answer("Ты уже участвуешь!", show_alert=True)
-        return
-
-    STATE["participants"].append(uid)
-    STATE["user_data"][uid] = {'votes': 0, 'invites': 0, 'wins': 0, 'referrals': []}  # инициализация статистики
-    save_state()
-    await q.answer("Ты в битве!")
-
-    if not STATE["active"] and len(STATE["participants"]) >= MIN_PARTICIPANTS:
-        asyncio.create_task(start_round(context))
-
-# ===== СТАРТ РАУНДА =====
-async def start_round(context):
-    if len(STATE["participants"]) < MIN_PARTICIPANTS:
-        await context.bot.send_message(
-            chat_id=f"@{CHANNEL}",
-            text=f"⚔️ *Недостаточно участников для начала турнира.* Пожалуйста, пригласите ещё людей!",
-            parse_mode="Markdown"
-        )
-        return
-
-    STATE["active"] = True
-    STATE["round"] += 1
-    STATE["votes"] = {}
-    STATE["posts"].clear()
-    save_state()
-
-    await context.bot.send_message(
-        chat_id=f"@{CHANNEL}",
-        text=f"⚔️ *Раунд {STATE['round']} начался!*",
-        parse_mode="Markdown"
-    )
-
-    for uid in STATE["participants"]:
-        user = await context.bot.get_chat(uid)
-        msg = await context.bot.send_message(
-            chat_id=f"@{CHANNEL}",
-            text=f"⚔️ *Раунд {STATE['round']}*\n\nДва отважных воина сражаются!\n\n"
-                 f"@{user.username or user.first_name} VS @{user.username or user.first_name}\n\n"
-                 f"⏳ Время: 14 часов\n"
-                 f"🔥 Оставшееся время: 9 часов\n",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("👍 Проголосовать за @username", callback_data=f"vote:{uid}")
-            ]])
-        )
-        STATE["posts"][str(uid)] = msg.message_id
-        STATE["votes"][str(msg.message_id)] = []
-
-    save_state()
-    await asyncio.sleep(ROUND_TIME)
-    await end_round(context)
-
-# ===== КОНЕЦ РАУНДА =====
-async def end_round(context):
-    scores = []
-
-    for uid, msg_id in STATE["posts"].items():
-        votes = len(STATE["votes"].get(str(msg_id), []))
-        scores.append((int(uid), votes))
-
-    scores.sort(key=lambda x: x[1], reverse=True)
-    winners = scores[:max(1, len(scores)//2)]
-    STATE["participants"] = [uid for uid, _ in winners]
-    save_state()
-
-    await context.bot.send_message(
-        chat_id=f"@{CHANNEL}",
-        text=f"✅ Раунд {STATE['round']} завершён"
-    )
-
-    if len(STATE["participants"]) == 1:
-        user = await context.bot.get_chat(STATE["participants"][0])
-        STATE["user_data"][STATE["participants"][0]]['wins'] += 1
-        save_state()
-        await context.bot.send_message(
-            chat_id=f"@{CHANNEL}",
-            text=f"🏆 *ПОБЕДИТЕЛЬ ТУРНИРА*\n@{user.username or user.first_name}",
-            parse_mode="Markdown"
-        )
-        STATE["active"] = False
-        STATE["participants"].clear()
-        save_state()
-        return
-
-    asyncio.create_task(start_round(context))
-
-# ===== ГОЛОС =====
-async def vote(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    voter = q.from_user.id
-    msg_id = str(q.message.message_id)
-
-    if voter in STATE["votes"].get(msg_id, []):
-        await q.answer("Ты уже голосовал", show_alert=True)
-        return
-
-    STATE["votes"].setdefault(msg_id, []).append(voter)
-    STATE["user_data"][voter]['votes'] += 1  # Увеличиваем количество голосов
-    save_state()
-    await q.answer("Голос принят 👍")
-
-# ===== НАЙТИ СЕБЯ =====
-async def find_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    uid = str(q.from_user.id)
-
-    msg_id = STATE["posts"].get(uid)
-    if not msg_id:
-        await q.answer("Ты сейчас не участвуешь", show_alert=True)
-        return
-
-    await q.message.reply_text(
-        "🔍 Твоя битва:",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("➡️ Перейти к битве", url=f"https://t.me/{CHANNEL}/{msg_id}")
-        ]])
-    )
-    await q.answer()
-
-# ===== ПРИГЛАСИТЬ (Реферальная программа) =====
+# ===== INVITE =====
 async def invite(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     uid = q.from_user.id
-    referral_link = f"https://t.me/{context.bot.username}?start={uid}"  # Создаём ссылку для приглашений
 
-    await q.answer("Ссылка для приглашения отправлена!")
+    link = f"https://t.me/{context.bot.username}?start={uid}"
+
+    await q.answer()
     await q.message.reply_text(
-        f"🔗 Ссылка для приглашения:\n{referral_link}",
-        reply_markup=main_menu()
+        f"🔗 Твоя реферальная ссылка:\n{link}"
     )
-
-# ===== ОБРАБОТКА РЕФЕРАЛОВ =====
-async def process_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.text.split('?start=')[1]
-    if user_id.isdigit():
-        referrer_id = int(user_id)
-
-        if referrer_id not in STATE["user_data"]:
-            STATE["user_data"][referrer_id] = {'votes': 0, 'invites': 0, 'wins': 0, 'referrals': []}
-
-        STATE["user_data"][referrer_id]['invites'] += 1
-        STATE["user_data"][referrer_id]['referrals'].append(update.message.from_user.id)
-        save_state()
-
-        await update.message.reply_text("Ты был приглашён! Удачи в турнире!")
 
 # ===== ROUTER =====
 async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = update.callback_query.data
-    if data == "join":
-        await join(update, context)
-    elif data == "rules":
+
+    if data == "rules":
         await rules(update, context)
-    elif data == "find_me":
-        await find_me(update, context)
     elif data == "invite":
         await invite(update, context)
-    elif data.startswith("vote"):
-        await vote(update, context)
 
 # ===== MAIN =====
 def main():
     load_state()
     app = ApplicationBuilder().token(TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(router))
-    app.add_handler(MessageHandler(filters.TEXT & filters.regex(r"^/start=\d+$"), process_referral))  # Обработка рефералов
+
     app.run_polling()
 
 if __name__ == "__main__":
