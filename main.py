@@ -1,12 +1,7 @@
 import os
 import json
 import asyncio
-from collections import defaultdict
-from telegram import (
-    Update,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton
-)
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -14,14 +9,14 @@ from telegram.ext import (
     ContextTypes
 )
 
-# ===== НАСТРОЙКИ =====
+# ================= НАСТРОЙКИ =================
 TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL = "battlertf"
 STATE_FILE = "state.json"
 ROUND_TIME = 15 * 60
 MIN_PARTICIPANTS = 2
 
-# ===== СОСТОЯНИЕ =====
+# ================= СОСТОЯНИЕ =================
 STATE = {
     "round": 0,
     "active": False,
@@ -31,7 +26,7 @@ STATE = {
     "user_data": {}
 }
 
-# ===== SAVE / LOAD =====
+# ================= SAVE / LOAD =================
 def save_state():
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(STATE, f, ensure_ascii=False, indent=2)
@@ -43,9 +38,9 @@ def load_state():
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             STATE.update(json.load(f))
     except:
-        print("Ошибка загрузки")
+        print("Ошибка загрузки state.json")
 
-# ===== МЕНЮ =====
+# ================= МЕНЮ =================
 def main_menu():
     return InlineKeyboardMarkup([
         [
@@ -58,12 +53,12 @@ def main_menu():
         ]
     ])
 
-# ===== /start + РЕФЕРАЛЫ =====
+# ================= /START + РЕФЕРАЛЫ =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     uid = user.id
 
-    # Инициализация профиля
+    # Создание профиля если нет
     if uid not in STATE["user_data"]:
         STATE["user_data"][uid] = {
             "votes": 0,
@@ -79,11 +74,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if referrer_id.isdigit():
             referrer_id = int(referrer_id)
 
-            if referrer_id != uid:  # нельзя пригласить себя
-                if uid not in STATE["user_data"][referrer_id]["referrals"]:
-                    STATE["user_data"][referrer_id]["invites"] += 1
-                    STATE["user_data"][referrer_id]["referrals"].append(uid)
-                    save_state()
+            if referrer_id != uid:
+                if referrer_id in STATE["user_data"]:
+                    if uid not in STATE["user_data"][referrer_id]["referrals"]:
+                        STATE["user_data"][referrer_id]["invites"] += 1
+                        STATE["user_data"][referrer_id]["referrals"].append(uid)
+                        save_state()
 
     save_state()
 
@@ -95,34 +91,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-# ===== ПРАВИЛА =====
+# ================= ПРАВИЛА =================
 async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     await update.callback_query.message.reply_text(
         "📜 *ПРАВИЛА БИТВЫ НИКОВ*\n\n"
-        "⚔️ *Формат турнира*\n"
-        "• Участники могут присоединяться даже во время раунда\n"
+        "⚔️ Формат турнира\n"
         "• Раунды запускаются автоматически\n"
-        "• Один раунд = ограниченное время\n\n"
-        "🗳 *Голосование*\n"
-        "• 1 пользователь = 1 голос за участника\n"
-        "• Повторное голосование запрещено\n"
-        "• Накрутка не поощряется\n\n"
-        "🏆 *Победа*\n"
+        "• Участники могут присоединяться во время раунда\n\n"
+        "🗳 Голосование\n"
+        "• 1 пользователь = 1 голос\n"
+        "• Повторное голосование запрещено\n\n"
+        "🏆 Победа\n"
         "• После каждого раунда часть игроков выбывает\n"
-        "• 4–5 раунд — редкость\n"
-        "• В финале ВСЕГДА только 1 победитель\n\n"
-        "⛔ *Важно*\n"
-        "• Проигравшие ждут следующий турнир\n"
-        "• Награды выдаются вручную администратором\n\n"
-        "🔐 *Конфиденциальность*\n"
-        "• Бот не передаёт личные данные\n"
-        "• Используются только ID и никнеймы\n"
-        "• Все данные защищены",
+        "• В финале остаётся 1 победитель\n\n"
+        "🔐 Бот не передаёт личные данные",
         parse_mode="Markdown"
     )
 
-# ===== INVITE =====
+# ================= ПРИГЛАСИТЬ =================
 async def invite(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     uid = q.from_user.id
@@ -134,7 +121,7 @@ async def invite(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔗 Твоя реферальная ссылка:\n{link}"
     )
 
-# ===== ROUTER =====
+# ================= ROUTER =================
 async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = update.callback_query.data
 
@@ -143,14 +130,16 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "invite":
         await invite(update, context)
 
-# ===== MAIN =====
+# ================= MAIN =================
 def main():
     load_state()
+
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(router))
 
+    print("Бот запущен...")
     app.run_polling()
 
 if __name__ == "__main__":
