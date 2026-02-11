@@ -7,10 +7,13 @@ from telegram.ext import (
     CommandHandler,
     CallbackQueryHandler,
     ContextTypes,
+    MessageHandler,
+    filters,
 )
 
 TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = -1003814033445
+GROUP_LINK = https://t.me/battlertf/2
 ROUND_TIME = 7 * 60 * 60  # 7 часов
 
 ROUND_REQUIREMENTS = {
@@ -58,6 +61,15 @@ CREATE TABLE IF NOT EXISTS game (
 cursor.execute("INSERT OR IGNORE INTO game (id, round, active) VALUES (1, 1, 0)")
 conn.commit()
 
+# ================= BATTLE STATE =================
+
+current_battle = {
+    "p1": None,
+    "p2": None,
+    "v1": 0,
+    "v2": 0,
+    "message_id": None
+}
 
 # ================= MENU =================
 
@@ -68,7 +80,6 @@ def menu():
         [InlineKeyboardButton("📜 Правила", callback_data="rules")],
         [InlineKeyboardButton("📩 Пригласить", callback_data="ref")]
     ])
-
 
 # ================= START =================
 
@@ -95,11 +106,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
 
     await update.message.reply_text(
-        "🔥 <b>БИТВА НИКОВ</b> 🔥\n\nДобро пожаловать!\n\nВыбери действие 👇",
+        "🔥 <b>БИТВА НИКОВ</b> 🔥\n\n"
+        "Добро пожаловать в главный турнир ников!\n\n"
+        f"💬 Группа проекта:\n{GROUP_LINK}\n\n"
+        "Выбери действие 👇",
         parse_mode="HTML",
         reply_markup=menu()
     )
-
 
 # ================= JOIN =================
 
@@ -121,7 +134,6 @@ async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.answer("🔥 Ты в игре!", show_alert=True)
 
-
 # ================= FIND ME =================
 
 async def find_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -142,7 +154,6 @@ async def find_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.message.reply_text(
         f"👤 Ты пригласил: {result[0]} участников"
     )
-
 
 # ================= RULES =================
 
@@ -169,7 +180,6 @@ async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="HTML"
     )
 
-
 # ================= REF =================
 
 async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -180,6 +190,95 @@ async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
     link = f"https://t.me/{context.bot.username}?start={user.id}"
     await query.message.reply_text(f"📩 Твоя ссылка:\n{link}")
 
+# ================= CREATE BATTLE =================
+
+async def create_battle(context: ContextTypes.DEFAULT_TYPE):
+
+    cursor.execute("""
+        SELECT user_id, username FROM players
+        WHERE alive=1
+        LIMIT 2
+    """)
+    players = cursor.fetchall()
+
+    if len(players) < 2:
+        return
+
+    p1_id, p1_name = players[0]
+    p2_id, p2_name = players[1]
+
+    current_battle["p1"] = p1_id
+    current_battle["p2"] = p2_id
+    current_battle["v1"] = 0
+    current_battle["v2"] = 0
+
+    text = (
+        "🔥 <b>Битва Ников</b> 🔥\n\n"
+        "🏆 Раунд: 1\n"
+        "👥 Участников: 2\n\n"
+        f"@{p1_name} VS @{p2_name}\n\n"
+        "📊 Количество голосов:\n"
+        "Участник 1: 0\n"
+        "Участник 2: 0\n\n"
+        "Голосовать 👍 (ответом на сообщение)"
+    )
+
+    msg = await context.bot.send_message(
+        chat_id=CHANNEL_ID,
+        text=text,
+        parse_mode="HTML"
+    )
+
+    current_battle["message_id"] = msg.message_id
+
+# ================= VOTE =================
+
+async def vote(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if update.message.chat_id != CHANNEL_ID:
+        return
+
+    if not update.message.reply_to_message:
+        return
+
+    if update.message.reply_to_message.message_id != current_battle.get("message_id"):
+        return
+
+    if update.message.text != "👍":
+        return
+
+    user_id = update.message.from_user.id
+
+    if user_id == current_battle["p1"]:
+        current_battle["v1"] += 1
+    elif user_id == current_battle["p2"]:
+        current_battle["v2"] += 1
+    else:
+        return
+
+    cursor.execute("SELECT username FROM players WHERE user_id=?", (current_battle["p1"],))
+    p1_name = cursor.fetchone()[0]
+
+    cursor.execute("SELECT username FROM players WHERE user_id=?", (current_battle["p2"],))
+    p2_name = cursor.fetchone()[0]
+
+    new_text = (
+        "🔥 <b>Битва Ников</b> 🔥\n\n"
+        "🏆 Раунд: 1\n"
+        "👥 Участников: 2\n\n"
+        f"@{p1_name} VS @{p2_name}\n\n"
+        "📊 Количество голосов:\n"
+        f"Участник 1: {current_battle['v1']}\n"
+        f"Участник 2: {current_battle['v2']}\n\n"
+        "Голосовать 👍 (ответом на сообщение)"
+    )
+
+    await context.bot.edit_message_text(
+        chat_id=CHANNEL_ID,
+        message_id=current_battle["message_id"],
+        text=new_text,
+        parse_mode="HTML"
+    )
 
 # ================= ROUND LOGIC =================
 
@@ -207,7 +306,6 @@ async def next_round(context: ContextTypes.DEFAULT_TYPE):
 
     context.job_queue.run_once(next_round, ROUND_TIME)
 
-
 # ================= FINISH =================
 
 async def finish_game(context):
@@ -231,7 +329,6 @@ async def finish_game(context):
     cursor.execute("UPDATE game SET round=1, active=0 WHERE id=1")
     conn.commit()
 
-
 # ================= MAIN =================
 
 def main():
@@ -242,12 +339,13 @@ def main():
     app.add_handler(CallbackQueryHandler(find_me, pattern="me"))
     app.add_handler(CallbackQueryHandler(rules, pattern="rules"))
     app.add_handler(CallbackQueryHandler(referral, pattern="ref"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, vote))
 
     app.job_queue.run_once(next_round, ROUND_TIME)
+    app.job_queue.run_once(create_battle, 20)
 
     print("🚀 Production версия запущена")
     app.run_polling(drop_pending_updates=True)
-
 
 if __name__ == "__main__":
     main()
