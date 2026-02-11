@@ -4,64 +4,78 @@ import random
 import logging
 from datetime import datetime, timedelta
 
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
-    ContextTypes
+    ContextTypes,
 )
 
+# ========= НАСТРОЙКИ =========
+
 TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = -100XXXXXXXXX  # сюда вставишь свой канал
+CHANNEL_ID = -100XXXXXXXXXX  # ВСТАВЬ ID КАНАЛА
+
+if not TOKEN:
+    print("❌ BOT_TOKEN не найден!")
+    exit()
 
 logging.basicConfig(level=logging.INFO)
 
-# ===== DATABASE =====
+# ========= БАЗА =========
 
 conn = sqlite3.connect("giveaway.db", check_same_thread=False)
 cursor = conn.cursor()
 
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS giveaways (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+CREATE TABLE IF NOT EXISTS giveaway (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
     message_id INTEGER,
+    chat_id INTEGER,
     end_time TEXT,
-    active INTEGER DEFAULT 1
+    active INTEGER DEFAULT 0
 )
 """)
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS participants (
-    giveaway_id INTEGER,
-    user_id INTEGER,
-    UNIQUE(giveaway_id, user_id)
+    user_id INTEGER UNIQUE
 )
 """)
 
 conn.commit()
 
-# ===== START =====
+# ========= START =========
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🎉 Бот для проведения розыгрышей!\n\n"
-        "Админ: /giveaway 60 (60 минут)"
+        "🎉 Giveaway Bot v2\n\n"
+        "Создать розыгрыш:\n"
+        "/giveaway 30"
     )
 
-# ===== CREATE GIVEAWAY =====
+# ========= СОЗДАНИЕ =========
 
 async def giveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    cursor.execute("SELECT active FROM giveaway WHERE id=1")
+    row = cursor.fetchone()
+
+    if row and row[0] == 1:
+        await update.message.reply_text("⚠️ Уже есть активный розыгрыш.")
+        return
 
     if not context.args:
         await update.message.reply_text("Укажи время в минутах.")
         return
 
-    minutes = int(context.args[0])
+    try:
+        minutes = int(context.args[0])
+    except:
+        await update.message.reply_text("Время должно быть числом.")
+        return
+
     end_time = datetime.utcnow() + timedelta(minutes=minutes)
 
     keyboard = InlineKeyboardMarkup([
@@ -69,35 +83,37 @@ async def giveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ])
 
     msg = await update.message.reply_text(
-        f"🎁 РОЗЫГРЫШ!\n\n"
-        f"Завершится через {minutes} минут.\n\n"
-        f"Нажми кнопку ниже 👇",
+        f"🎁 РОЗЫГРЫШ\n\n"
+        f"⏳ Закончится через {minutes} минут\n\n"
+        f"Нажми кнопку 👇",
         reply_markup=keyboard
     )
 
-    cursor.execute(
-        "INSERT INTO giveaways (message_id, end_time) VALUES (?,?)",
-        (msg.message_id, end_time.isoformat())
-    )
+    cursor.execute("DELETE FROM participants")
+
+    cursor.execute("""
+        INSERT OR REPLACE INTO giveaway (id, message_id, chat_id, end_time, active)
+        VALUES (1, ?, ?, ?, 1)
+    """, (msg.message_id, msg.chat_id, end_time.isoformat()))
+
     conn.commit()
 
-# ===== JOIN =====
+# ========= УЧАСТИЕ =========
 
 async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    user = query.from_user
+    cursor.execute("SELECT active FROM giveaway WHERE id=1")
+    row = cursor.fetchone()
 
-    cursor.execute("SELECT id FROM giveaways WHERE active=1")
-    giveaway = cursor.fetchone()
-
-    if not giveaway:
+    if not row or row[0] == 0:
         await query.answer("Нет активного розыгрыша", show_alert=True)
         return
 
-    giveaway_id = giveaway[0]
+    user = query.from_user
 
+    # Проверка подписки
     try:
         member = await context.bot.get_chat_member(CHANNEL_ID, user.id)
         if member.status not in ["member", "administrator", "creator"]:
@@ -108,62 +124,63 @@ async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        cursor.execute(
-            "INSERT INTO participants VALUES (?,?)",
-            (giveaway_id, user.id)
-        )
+        cursor.execute("INSERT INTO participants VALUES (?)", (user.id,))
         conn.commit()
         await query.answer("Ты участвуешь!")
     except:
-        await query.answer("Ты уже участвуешь")
+        await query.answer("Ты уже участвуешь!")
 
-# ===== CHECK END =====
+# ========= ПРОВЕРКА =========
 
-async def check_giveaways(context: ContextTypes.DEFAULT_TYPE):
+async def check_giveaway(context: ContextTypes.DEFAULT_TYPE):
 
-    now = datetime.utcnow().isoformat()
+    cursor.execute("SELECT message_id, chat_id, end_time, active FROM giveaway WHERE id=1")
+    row = cursor.fetchone()
 
-    cursor.execute(
-        "SELECT id, message_id FROM giveaways WHERE active=1 AND end_time <= ?",
-        (now,)
-    )
+    if not row:
+        return
 
-    giveaways = cursor.fetchall()
+    message_id, chat_id, end_time, active = row
 
-    for giveaway in giveaways:
-        giveaway_id, message_id = giveaway
+    if active == 0:
+        return
 
-        cursor.execute(
-            "SELECT user_id FROM participants WHERE giveaway_id=?",
-            (giveaway_id,)
-        )
+    if datetime.utcnow() >= datetime.fromisoformat(end_time):
+
+        cursor.execute("SELECT user_id FROM participants")
         users = cursor.fetchall()
 
         if users:
             winner = random.choice(users)[0]
-            text = f"🏆 Розыгрыш завершён!\n\nПобедитель: tg://user?id={winner}"
+            text = f"🏆 Розыгрыш завершён!\n\nПобедитель:\n[tg://user?id={winner}](tg://user?id={winner})"
         else:
-            text = "Розыгрыш завершён. Участников нет."
+            text = "Розыгрыш завершён.\nУчастников нет."
 
-        await context.bot.edit_message_text(
-            chat_id=context.job.chat_id,
-            message_id=message_id,
-            text=text
-        )
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                parse_mode="Markdown"
+            )
+        except:
+            pass
 
-        cursor.execute("UPDATE giveaways SET active=0 WHERE id=?", (giveaway_id,))
+        cursor.execute("UPDATE giveaway SET active=0 WHERE id=1")
         conn.commit()
 
-# ===== MAIN =====
+# ========= MAIN =========
 
 def main():
+    print("🚀 Giveaway Bot v2 запущен")
+
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("giveaway", giveaway))
     app.add_handler(CallbackQueryHandler(join, pattern="join"))
 
-    app.job_queue.run_repeating(check_giveaways, 30)
+    app.job_queue.run_repeating(check_giveaway, 20)
 
     app.run_polling()
 
