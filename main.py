@@ -1,5 +1,6 @@
 import logging
 import random
+import os
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -10,10 +11,13 @@ from telegram.ext import (
 
 # ================= НАСТРОЙКИ =================
 
-TOKEN = "YOUR_BOT_TOKEN"
+TOKEN = os.getenv("BOT_TOKEN")  # Берём токен из Railway
 CHANNEL_ID = -1001234567890  # <-- ВСТАВЬ ID КАНАЛА
 ROUND_DURATION = 7 * 60 * 60  # 7 часов
 MIN_PLAYERS = 2
+
+if not TOKEN:
+    raise ValueError("BOT_TOKEN не найден в переменных Railway!")
 
 # ================= ЛОГИ =================
 
@@ -216,8 +220,9 @@ async def update_post(context: ContextTypes.DEFAULT_TYPE):
 
 # ================= ЗАПУСК =================
 
-async def on_startup(app):
-    await update_post(app)
+async def on_startup(application):
+    await application.bot.initialize()
+    await update_post(application)
 
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
