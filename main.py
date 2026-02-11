@@ -2,14 +2,24 @@ import os
 import json
 import asyncio
 from collections import defaultdict
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, ContextTypes
+from telegram import (
+    Update,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton
+)
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    ContextTypes
+)
 
 # ===== НАСТРОЙКИ =====
 TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL = "battlertf"
 STATE_FILE = "state.json"
 ROUND_TIME = 15 * 60  # 15 минут
+MIN_PARTICIPANTS = 2  # Минимальное количество участников для старта
 
 # ===== СОСТОЯНИЕ =====
 STATE = {
@@ -17,7 +27,8 @@ STATE = {
     "active": False,
     "participants": [],
     "posts": {},      # user_id -> message_id
-    "votes": {}       # message_id -> [user_id]
+    "votes": {},      # message_id -> [user_id]
+    "user_data": {}   # user_id -> { 'votes': 0, 'invites': 0, 'wins': 0 }
 }
 
 # ===== SAVE / LOAD =====
@@ -95,18 +106,27 @@ async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     STATE["participants"].append(uid)
+    STATE["user_data"][uid] = {'votes': 0, 'invites': 0, 'wins': 0}  # инициализация статистики
     save_state()
-    await q.answer("Ты участвуешь!")
+    await q.answer("Ты в битве!")
 
-    if not STATE["active"] and len(STATE["participants"]) >= 2:
+    if not STATE["active"] and len(STATE["participants"]) >= MIN_PARTICIPANTS:
         asyncio.create_task(start_round(context))
 
 # ===== СТАРТ РАУНДА =====
 async def start_round(context):
+    if len(STATE["participants"]) < MIN_PARTICIPANTS:
+        await context.bot.send_message(
+            chat_id=f"@{CHANNEL}",
+            text=f"⚔️ *Недостаточно участников для начала турнира.* Пожалуйста, пригласите ещё людей!",
+            parse_mode="Markdown"
+        )
+        return
+
     STATE["active"] = True
     STATE["round"] += 1
     STATE["votes"] = {}
-    STATE["posts"] = {}
+    STATE["posts"].clear()
     save_state()
 
     await context.bot.send_message(
@@ -120,9 +140,9 @@ async def start_round(context):
         msg = await context.bot.send_message(
             chat_id=f"@{CHANNEL}",
             text=f"⚔️ Раунд {STATE['round']}\n@{user.username or user.first_name}",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("👍 Проголосовать", callback_data=f"vote:{uid}")]
-            ])
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("👍 Проголосовать", callback_data=f"vote:{uid}")
+            ]])
         )
         STATE["posts"][str(uid)] = msg.message_id
         STATE["votes"][str(msg.message_id)] = []
@@ -140,8 +160,8 @@ async def end_round(context):
         scores.append((int(uid), votes))
 
     scores.sort(key=lambda x: x[1], reverse=True)
-    survivors = scores[:max(1, len(scores)//2)]
-    STATE["participants"] = [uid for uid, _ in survivors]
+    winners = scores[:max(1, len(scores)//2)]
+    STATE["participants"] = [uid for uid, _ in winners]
     save_state()
 
     await context.bot.send_message(
@@ -151,12 +171,15 @@ async def end_round(context):
 
     if len(STATE["participants"]) == 1:
         user = await context.bot.get_chat(STATE["participants"][0])
+        STATE["user_data"][STATE["participants"][0]]['wins'] += 1
+        save_state()
         await context.bot.send_message(
             chat_id=f"@{CHANNEL}",
             text=f"🏆 *ПОБЕДИТЕЛЬ ТУРНИРА*\n@{user.username or user.first_name}",
             parse_mode="Markdown"
         )
-        STATE.update({"round": 0, "active": False, "participants": []})
+        STATE["active"] = False
+        STATE["participants"].clear()
         save_state()
         return
 
@@ -172,7 +195,8 @@ async def vote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer("Ты уже голосовал", show_alert=True)
         return
 
-    STATE["votes"][msg_id].append(voter)
+    STATE["votes"].setdefault(msg_id, []).append(voter)
+    STATE["user_data"][voter]['votes'] += 1  # Увеличиваем количество голосов
     save_state()
     await q.answer("Голос принят 👍")
 
@@ -187,10 +211,10 @@ async def find_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await q.message.reply_text(
-        "🔍 Твой пост:",
-        reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("➡️ Перейти к битве", url=f"https://t.me/{CHANNEL}/{msg_id}")]
-        ])
+        "🔍 Твоя битва:",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("➡️ Перейти к битве", url=f"https://t.me/{CHANNEL}/{msg_id}")
+        ]])
     )
     await q.answer()
 
