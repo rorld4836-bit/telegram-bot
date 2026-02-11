@@ -69,10 +69,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # обработка реферала
     if context.args:
         referrer_id = context.args[0]
-
         if referrer_id.isdigit():
             referrer_id = int(referrer_id)
-
             if referrer_id != uid:
                 if referrer_id in STATE["user_data"]:
                     if uid not in STATE["user_data"][referrer_id]["referrals"]:
@@ -92,8 +90,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ================= ПРАВИЛА =================
 async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.callback_query.answer()
-    await update.callback_query.message.reply_text(
+    q = update.callback_query
+    await q.answer()
+
+    await q.message.reply_text(
         "📜 *ПРАВИЛА БИТВЫ НИКОВ*\n\n"
         "⚔️ Формат турнира\n"
         "• Раунды запускаются автоматически\n"
@@ -111,6 +111,8 @@ async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ================= УЧАСТВОВАТЬ =================
 async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
+    await q.answer()  # 🔥 фикс зависания
+
     uid = q.from_user.id
 
     if uid in STATE["participants"]:
@@ -128,13 +130,14 @@ async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
 
     save_state()
-    await q.answer("Ты в турнире!")
+    await q.message.reply_text("✅ Ты в турнире!")
 
 # ================= НАЙТИ СЕБЯ =================
 async def find_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    uid = str(q.from_user.id)
+    await q.answer()  # 🔥 фикс зависания
 
+    uid = str(q.from_user.id)
     msg_id = STATE["posts"].get(uid)
 
     if not msg_id:
@@ -151,16 +154,14 @@ async def find_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
         ]])
     )
 
-    await q.answer()
-
 # ================= ПРИГЛАСИТЬ =================
 async def invite(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
-    uid = q.from_user.id
+    await q.answer()
 
+    uid = q.from_user.id
     link = f"https://t.me/{context.bot.username}?start={uid}"
 
-    await q.answer()
     await q.message.reply_text(
         f"🔗 Твоя реферальная ссылка:\n{link}"
     )
@@ -171,20 +172,16 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "join":
         await join(update, context)
-
     elif data == "rules":
         await rules(update, context)
-
     elif data == "find_me":
         await find_me(update, context)
-
     elif data == "invite":
         await invite(update, context)
 
 # ================= MAIN =================
 def main():
     load_state()
-
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
