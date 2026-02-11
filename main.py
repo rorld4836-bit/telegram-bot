@@ -18,8 +18,8 @@ from telegram.ext import (
 # ================= НАСТРОЙКИ =================
 
 TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_USERNAME = "battlertf"   # без @
-ROUND_DURATION = 7 * 60 * 60     # 7 часов
+CHANNEL_USERNAME = "battlertf"
+ROUND_DURATION = 7 * 60 * 60
 MIN_PLAYERS = 2
 MAX_PLAYERS = 16
 STATE_FILE = "state.json"
@@ -28,11 +28,13 @@ STATE_FILE = "state.json"
 
 STATE = {
     "participants": [],
+    "round_players": [],
+    "eliminated": [],
     "active_round": False,
     "round_number": 0,
-    "battles": [],          # список боёв текущего раунда
-    "votes": {},            # battle_id -> {user_id: vote}
-    "battle_messages": {},  # battle_id -> message_id
+    "battles": [],
+    "votes": {},
+    "battle_messages": {},
     "round_end_time": None
 }
 
@@ -78,8 +80,26 @@ async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_id = q.from_user.id
 
+    # Если турнир идёт
+    if STATE["active_round"]:
+
+        if user_id in STATE["round_players"]:
+            await q.message.reply_text("🔥 Ты уже проходишь дальше в турнире!")
+            return
+
+        if user_id in STATE["eliminated"]:
+            await q.message.reply_text("❌ Ты выбыл. Жди следующий турнир.")
+            return
+
+        if user_id not in STATE["participants"]:
+            STATE["participants"].append(user_id)
+            save_state()
+            await q.message.reply_text("✅ Ты зарегистрирован на следующий турнир!")
+            return
+
+    # Если турнир не идёт
     if user_id in STATE["participants"]:
-        await q.message.reply_text("Ты уже участвуешь.")
+        await q.message.reply_text("Ты уже зарегистрирован.")
         return
 
     STATE["participants"].append(user_id)
@@ -103,7 +123,7 @@ async def find_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await q.message.reply_text(
                     "Твоя битва:",
                     reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("Перейти", url=link)]
+                        [InlineKeyboardButton("Перейти к битве", url=link)]
                     ])
                 )
                 return
@@ -121,6 +141,7 @@ async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• Раунд длится 7 часов\n"
         "• 1 пользователь = 1 голос\n"
         "• Нельзя голосовать дважды\n"
+        "• Проигравшие ждут следующий турнир\n"
         "• В финале всегда 1 победитель\n"
         "• Конфиденциальность игроков защищена"
     )
@@ -143,11 +164,13 @@ async def start_round(context: ContextTypes.DEFAULT_TYPE):
 
     STATE["active_round"] = True
     STATE["round_number"] += 1
+    STATE["round_players"] = STATE["participants"][:]
+    STATE["eliminated"] = []
     STATE["battles"] = []
     STATE["votes"] = {}
     STATE["battle_messages"] = {}
 
-    players = STATE["participants"][:]
+    players = STATE["round_players"][:]
     random.shuffle(players)
 
     for i in range(0, len(players), 2):
@@ -160,9 +183,9 @@ async def start_round(context: ContextTypes.DEFAULT_TYPE):
             f"🔥 Битвы Ников\n"
             f"Раунд {STATE['round_number']}\n\n"
             f"⚔️ Два отважных воина сходятся в битве!\n\n"
-            f"<a href='tg://user?id={battle[0]}'>Игрок 1</a> "
+            f"<a href='tg://user?id={battle[0]}'>Игрок</a> "
             f"VS "
-            f"<a href='tg://user?id={battle[1]}'>Игрок 2</a>\n\n"
+            f"<a href='tg://user?id={battle[1]}'>Игрок</a>\n\n"
             f"⏳ Время: 7 часов"
         )
 
@@ -184,7 +207,6 @@ async def start_round(context: ContextTypes.DEFAULT_TYPE):
         STATE["votes"][str(battle_id)] = {}
 
     STATE["round_end_time"] = (datetime.utcnow() + timedelta(seconds=ROUND_DURATION)).isoformat()
-
     save_state()
 
     context.job_queue.run_once(end_round, ROUND_DURATION)
@@ -197,7 +219,7 @@ async def vote(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     data = q.data.split("_")
     battle_id = data[1]
-    choice = data[2]
+    choice = int(data[2])
     user_id = q.from_user.id
 
     if user_id in STATE["votes"][battle_id]:
@@ -206,11 +228,11 @@ async def vote(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     battle = STATE["battles"][int(battle_id)]
 
-    if battle[int(choice)] == user_id:
+    if battle[choice] == user_id:
         await q.answer("Нельзя голосовать за себя!", show_alert=True)
         return
 
-    STATE["votes"][battle_id][user_id] = int(choice)
+    STATE["votes"][battle_id][user_id] = choice
     save_state()
 
 # ================= ЗАВЕРШЕНИЕ РАУНДА =================
@@ -226,9 +248,13 @@ async def end_round(context: ContextTypes.DEFAULT_TYPE):
         count1 = sum(1 for v in votes.values() if v == 1)
 
         winner = battle[0] if count0 >= count1 else battle[1]
+        loser = battle[1] if winner == battle[0] else battle[0]
+
         winners.append(winner)
+        STATE["eliminated"].append(loser)
 
     STATE["participants"] = winners
+    STATE["round_players"] = winners
     STATE["active_round"] = False
 
     if len(winners) == 1:
@@ -237,8 +263,12 @@ async def end_round(context: ContextTypes.DEFAULT_TYPE):
             text=f"🏆 Победитель турнира!\n\n<a href='tg://user?id={winners[0]}'>Чемпион</a>",
             parse_mode="HTML"
         )
+
         STATE["round_number"] = 0
         STATE["participants"] = []
+        STATE["round_players"] = []
+        STATE["eliminated"] = []
+
     else:
         await start_round(context)
 
