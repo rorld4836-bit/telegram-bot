@@ -1,6 +1,5 @@
 import os
 import json
-import asyncio
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     ApplicationBuilder,
@@ -13,23 +12,21 @@ from telegram.ext import (
 TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL = "battlertf"
 STATE_FILE = "state.json"
-ROUND_TIME = 15 * 60
-MIN_PARTICIPANTS = 2
 
 # ================= СОСТОЯНИЕ =================
 STATE = {
-    "round": 0,
-    "active": False,
     "participants": [],
     "posts": {},
-    "votes": {},
     "user_data": {}
 }
 
-# ================= SAVE / LOAD =================
+# ================= БЕЗОПАСНОЕ СОХРАНЕНИЕ =================
 def save_state():
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(STATE, f, ensure_ascii=False, indent=2)
+    try:
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(STATE, f)
+    except Exception as e:
+        print("Ошибка сохранения:", e)
 
 def load_state():
     if not os.path.exists(STATE_FILE):
@@ -37,8 +34,8 @@ def load_state():
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             STATE.update(json.load(f))
-    except:
-        print("Ошибка загрузки state.json")
+    except Exception as e:
+        print("Ошибка загрузки:", e)
 
 # ================= МЕНЮ =================
 def main_menu():
@@ -53,108 +50,67 @@ def main_menu():
         ]
     ])
 
-# ================= /START + РЕФЕРАЛЫ =================
+# ================= /START =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    uid = user.id
+    uid = update.effective_user.id
 
     if uid not in STATE["user_data"]:
         STATE["user_data"][uid] = {
-            "votes": 0,
             "invites": 0,
-            "wins": 0,
-            "referrals": []
+            "wins": 0
         }
-
-    # обработка реферала
-    if context.args:
-        referrer_id = context.args[0]
-        if referrer_id.isdigit():
-            referrer_id = int(referrer_id)
-            if referrer_id != uid:
-                if referrer_id in STATE["user_data"]:
-                    if uid not in STATE["user_data"][referrer_id]["referrals"]:
-                        STATE["user_data"][referrer_id]["invites"] += 1
-                        STATE["user_data"][referrer_id]["referrals"].append(uid)
-                        save_state()
-
-    save_state()
+        save_state()
 
     await update.message.reply_text(
-        "🔥 *Добро пожаловать в Битву Ников!*\n\n"
+        "🔥 Добро пожаловать в Битву Ников!\n\n"
         f"Турнир проходит в канале:\n👉 https://t.me/{CHANNEL}\n\n"
         "Используй кнопки ниже 👇",
-        reply_markup=main_menu(),
-        parse_mode="Markdown"
+        reply_markup=main_menu()
     )
 
-# ================= ПРАВИЛА =================
+# ================= JOIN =================
+async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()  # отвечаем сразу
+
+    uid = q.from_user.id
+
+    if uid in STATE["participants"]:
+        await q.message.reply_text("Ты уже участвуешь!")
+        return
+
+    STATE["participants"].append(uid)
+    save_state()
+
+    await q.message.reply_text("✅ Ты успешно добавлен в турнир!")
+
+# ================= FIND ME =================
+async def find_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+
+    uid = q.from_user.id
+
+    if uid not in STATE["participants"]:
+        await q.message.reply_text("Ты сейчас не участвуешь.")
+        return
+
+    await q.message.reply_text("Ты участвуешь в турнире ✅")
+
+# ================= RULES =================
 async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
 
     await q.message.reply_text(
-        "📜 *ПРАВИЛА БИТВЫ НИКОВ*\n\n"
-        "⚔️ Формат турнира\n"
-        "• Раунды запускаются автоматически\n"
-        "• Участники могут присоединяться во время раунда\n\n"
-        "🗳 Голосование\n"
-        "• 1 пользователь = 1 голос\n"
-        "• Повторное голосование запрещено\n\n"
-        "🏆 Победа\n"
-        "• После каждого раунда часть игроков выбывает\n"
-        "• В финале остаётся 1 победитель\n\n"
-        "🔐 Бот не передаёт личные данные",
-        parse_mode="Markdown"
+        "📜 ПРАВИЛА БИТВЫ НИКОВ\n\n"
+        "• 1 голос = 1 участник\n"
+        "• Победитель определяется голосами\n"
+        "• Финал — 1 победитель\n"
+        "• Бот не передаёт личные данные"
     )
 
-# ================= УЧАСТВОВАТЬ =================
-async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()  # 🔥 фикс зависания
-
-    uid = q.from_user.id
-
-    if uid in STATE["participants"]:
-        await q.answer("Ты уже участвуешь!", show_alert=True)
-        return
-
-    STATE["participants"].append(uid)
-
-    if uid not in STATE["user_data"]:
-        STATE["user_data"][uid] = {
-            "votes": 0,
-            "invites": 0,
-            "wins": 0,
-            "referrals": []
-        }
-
-    save_state()
-    await q.message.reply_text("✅ Ты в турнире!")
-
-# ================= НАЙТИ СЕБЯ =================
-async def find_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()  # 🔥 фикс зависания
-
-    uid = str(q.from_user.id)
-    msg_id = STATE["posts"].get(uid)
-
-    if not msg_id:
-        await q.answer("Ты сейчас не участвуешь", show_alert=True)
-        return
-
-    await q.message.reply_text(
-        "🔍 Твоя битва:",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton(
-                "➡️ Перейти к битве",
-                url=f"https://t.me/{CHANNEL}/{msg_id}"
-            )
-        ]])
-    )
-
-# ================= ПРИГЛАСИТЬ =================
+# ================= INVITE =================
 async def invite(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
@@ -162,9 +118,7 @@ async def invite(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = q.from_user.id
     link = f"https://t.me/{context.bot.username}?start={uid}"
 
-    await q.message.reply_text(
-        f"🔗 Твоя реферальная ссылка:\n{link}"
-    )
+    await q.message.reply_text(f"Твоя ссылка:\n{link}")
 
 # ================= ROUTER =================
 async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -172,10 +126,10 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data == "join":
         await join(update, context)
-    elif data == "rules":
-        await rules(update, context)
     elif data == "find_me":
         await find_me(update, context)
+    elif data == "rules":
+        await rules(update, context)
     elif data == "invite":
         await invite(update, context)
 
@@ -187,7 +141,7 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(router))
 
-    print("Бот запущен...")
+    print("Бот стабильно запущен")
     app.run_polling()
 
 if __name__ == "__main__":
