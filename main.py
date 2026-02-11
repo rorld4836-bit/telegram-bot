@@ -1,3 +1,4 @@
+print("НОВАЯ ВЕРСИЯ ЗАГРУЖЕНА")
 import os
 import sqlite3
 import random
