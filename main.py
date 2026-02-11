@@ -2,248 +2,168 @@ import os
 import sqlite3
 import random
 import logging
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from datetime import datetime, timedelta
+
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
+)
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
-    ContextTypes,
+    ContextTypes
 )
 
-print("БОТ ЗАПУЩЕН")
-
 TOKEN = os.getenv("BOT_TOKEN")
-
-if not TOKEN:
-    print("❌ BOT_TOKEN не найден!")
-    exit()
-
-CHANNEL_LINK = "https://t.me/battlertf"
-CHANNEL_ID = -1003814033445
-
-ROUND_TIME = 7 * 60 * 60
-UPDATE_TIME = 30
-CREATE_BATTLE_INTERVAL = 600
+CHANNEL_ID = -100XXXXXXXXX  # сюда вставишь свой канал
 
 logging.basicConfig(level=logging.INFO)
 
-# ================= DATABASE =================
+# ===== DATABASE =====
 
-conn = sqlite3.connect("battle.db", check_same_thread=False)
+conn = sqlite3.connect("giveaway.db", check_same_thread=False)
 cursor = conn.cursor()
 
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS players (
-    user_id INTEGER PRIMARY KEY,
-    username TEXT,
-    invited INTEGER DEFAULT 0,
-    alive INTEGER DEFAULT 1
-)
-""")
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS referrals (
-    referrer_id INTEGER,
-    invited_id INTEGER UNIQUE
-)
-""")
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS battles (
+CREATE TABLE IF NOT EXISTS giveaways (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    p1 INTEGER,
-    p2 INTEGER,
     message_id INTEGER,
-    active INTEGER DEFAULT 1,
-    winner INTEGER DEFAULT NULL
+    end_time TEXT,
+    active INTEGER DEFAULT 1
 )
 """)
 
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS game (
-    id INTEGER PRIMARY KEY,
-    round INTEGER DEFAULT 1
+CREATE TABLE IF NOT EXISTS participants (
+    giveaway_id INTEGER,
+    user_id INTEGER,
+    UNIQUE(giveaway_id, user_id)
 )
 """)
-
-cursor.execute("INSERT OR IGNORE INTO game (id, round) VALUES (1,1)")
-
-cursor.execute("CREATE INDEX IF NOT EXISTS idx_players_alive ON players(alive)")
-cursor.execute("CREATE INDEX IF NOT EXISTS idx_battles_active ON battles(active)")
 
 conn.commit()
 
-# ================= MENU =================
-
-def menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚔️ Участвовать", callback_data="join")],
-        [InlineKeyboardButton("👤 Профиль", callback_data="me")],
-        [InlineKeyboardButton("📜 Правила", callback_data="rules")],
-        [InlineKeyboardButton("📩 Пригласить", callback_data="ref")]
-    ])
-
-# ================= START =================
+# ===== START =====
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    args = context.args
+    await update.message.reply_text(
+        "🎉 Бот для проведения розыгрышей!\n\n"
+        "Админ: /giveaway 60 (60 минут)"
+    )
+
+# ===== CREATE GIVEAWAY =====
+
+async def giveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if not context.args:
+        await update.message.reply_text("Укажи время в минутах.")
+        return
+
+    minutes = int(context.args[0])
+    end_time = datetime.utcnow() + timedelta(minutes=minutes)
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎉 Участвовать", callback_data="join")]
+    ])
+
+    msg = await update.message.reply_text(
+        f"🎁 РОЗЫГРЫШ!\n\n"
+        f"Завершится через {minutes} минут.\n\n"
+        f"Нажми кнопку ниже 👇",
+        reply_markup=keyboard
+    )
 
     cursor.execute(
-        "INSERT OR IGNORE INTO players (user_id, username) VALUES (?,?)",
-        (user.id, user.username)
+        "INSERT INTO giveaways (message_id, end_time) VALUES (?,?)",
+        (msg.message_id, end_time.isoformat())
     )
     conn.commit()
 
-    if args:
-        try:
-            ref_id = int(args[0])
-            if ref_id != user.id:
-                cursor.execute("SELECT 1 FROM referrals WHERE invited_id=?", (user.id,))
-                if not cursor.fetchone():
-                    cursor.execute("INSERT INTO referrals VALUES (?,?)", (ref_id, user.id))
-                    cursor.execute(
-                        "UPDATE players SET invited=invited+1 WHERE user_id=?",
-                        (ref_id,)
-                    )
-                    conn.commit()
-        except:
-            pass
+# ===== JOIN =====
 
-    await update.message.reply_text(
-        "🔥 <b>БИТВА НИКОВ</b> 🔥\n\n"
-        f"Битвы проходят здесь:\n{CHANNEL_LINK}\n\n"
-        "Выберите действие 👇",
-        parse_mode="HTML",
-        reply_markup=menu()
-    )
-
-# ================= RULES =================
-
-async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
 
-    await query.message.reply_text(
-        f"📜 <b>ПРАВИЛА</b>\n\n"
-        f"• Учитываются приглашения\n"
-        f"• Победитель один\n"
-        f"• 4 раунда\n"
-        f"• Награда: 50–500 ⭐ (зависит от активности)\n\n"
-        f"Битвы проходят здесь:\n{CHANNEL_LINK}",
-        parse_mode="HTML"
-    )
+    user = query.from_user
 
-# ================= CREATE BATTLE =================
+    cursor.execute("SELECT id FROM giveaways WHERE active=1")
+    giveaway = cursor.fetchone()
 
-async def create_battle(context: ContextTypes.DEFAULT_TYPE):
-
-    cursor.execute("SELECT COUNT(*) FROM battles WHERE active=1")
-    active_count = cursor.fetchone()[0]
-
-    # защита от перегрузки (макс 10 параллельных битв)
-    if active_count >= 10:
+    if not giveaway:
+        await query.answer("Нет активного розыгрыша", show_alert=True)
         return
 
-    cursor.execute("SELECT user_id FROM players WHERE alive=1")
-    players = [x[0] for x in cursor.fetchall()]
+    giveaway_id = giveaway[0]
 
-    if len(players) < 2:
+    try:
+        member = await context.bot.get_chat_member(CHANNEL_ID, user.id)
+        if member.status not in ["member", "administrator", "creator"]:
+            await query.answer("Подпишись на канал!", show_alert=True)
+            return
+    except:
+        await query.answer("Ошибка проверки подписки", show_alert=True)
         return
 
-    p1, p2 = random.sample(players, 2)
+    try:
+        cursor.execute(
+            "INSERT INTO participants VALUES (?,?)",
+            (giveaway_id, user.id)
+        )
+        conn.commit()
+        await query.answer("Ты участвуешь!")
+    except:
+        await query.answer("Ты уже участвуешь")
 
-    msg = await context.bot.send_message(
-        chat_id=CHANNEL_ID,
-        text="⏳ Создание битвы..."
-    )
+# ===== CHECK END =====
+
+async def check_giveaways(context: ContextTypes.DEFAULT_TYPE):
+
+    now = datetime.utcnow().isoformat()
 
     cursor.execute(
-        "INSERT INTO battles (p1, p2, message_id) VALUES (?,?,?)",
-        (p1, p2, msg.message_id)
+        "SELECT id, message_id FROM giveaways WHERE active=1 AND end_time <= ?",
+        (now,)
     )
-    conn.commit()
 
-# ================= UPDATE BATTLES =================
+    giveaways = cursor.fetchall()
 
-async def update_battles(context: ContextTypes.DEFAULT_TYPE):
+    for giveaway in giveaways:
+        giveaway_id, message_id = giveaway
 
-    cursor.execute("SELECT round FROM game WHERE id=1")
-    round_num = cursor.fetchone()[0]
+        cursor.execute(
+            "SELECT user_id FROM participants WHERE giveaway_id=?",
+            (giveaway_id,)
+        )
+        users = cursor.fetchall()
 
-    cursor.execute("SELECT id, p1, p2, message_id FROM battles WHERE active=1")
-    battles = cursor.fetchall()
-
-    for battle in battles:
-        b_id, p1, p2, message_id = battle
-
-        cursor.execute("SELECT username, invited FROM players WHERE user_id=?", (p1,))
-        u1 = cursor.fetchone()
-
-        cursor.execute("SELECT username, invited FROM players WHERE user_id=?", (p2,))
-        u2 = cursor.fetchone()
-
-        if not u1 or not u2:
-            continue
-
-        # Определение победителя после 4 раунда
-        if round_num >= 4:
-            if u1[1] > u2[1]:
-                winner = p1
-            elif u2[1] > u1[1]:
-                winner = p2
-            else:
-                winner = random.choice([p1, p2])
-
-            cursor.execute(
-                "UPDATE battles SET active=0, winner=? WHERE id=?",
-                (winner, b_id)
-            )
-            conn.commit()
-
-            winner_username = u1[0] if winner == p1 else u2[0]
-
-            text = (
-                "🏆 <b>БИТВА ЗАВЕРШЕНА</b>\n\n"
-                f"Победитель: @{winner_username}\n\n"
-                "Награда: 50–500 ⭐"
-            )
+        if users:
+            winner = random.choice(users)[0]
+            text = f"🏆 Розыгрыш завершён!\n\nПобедитель: tg://user?id={winner}"
         else:
-            text = (
-                "🔥 <b>БИТВА НИКОВ</b> 🔥\n\n"
-                f"🏆 Раунд: {round_num}\n\n"
-                f"@{u1[0]} VS @{u2[0]}\n\n"
-                f"📊 Приглашения:\n"
-                f"{u1[0]}: {u1[1]}\n"
-                f"{u2[0]}: {u2[1]}\n\n"
-                f"Канал: {CHANNEL_LINK}"
-            )
+            text = "Розыгрыш завершён. Участников нет."
 
-        try:
-            await context.bot.edit_message_text(
-                chat_id=CHANNEL_ID,
-                message_id=message_id,
-                text=text,
-                parse_mode="HTML"
-            )
-        except:
-            pass
+        await context.bot.edit_message_text(
+            chat_id=context.job.chat_id,
+            message_id=message_id,
+            text=text
+        )
 
-# ================= MAIN =================
+        cursor.execute("UPDATE giveaways SET active=0 WHERE id=?", (giveaway_id,))
+        conn.commit()
+
+# ===== MAIN =====
 
 def main():
-    print("БОТ ЗАПУЩЕН")
-
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(rules, pattern="rules"))
+    app.add_handler(CommandHandler("giveaway", giveaway))
+    app.add_handler(CallbackQueryHandler(join, pattern="join"))
 
-    # создание битв
-    app.job_queue.run_repeating(create_battle, CREATE_BATTLE_INTERVAL)
-
-    # обновление (ОДИН раз, без зацикливания)
-    app.job_queue.run_repeating(update_battles, UPDATE_TIME)
+    app.job_queue.run_repeating(check_giveaways, 30)
 
     app.run_polling()
 
