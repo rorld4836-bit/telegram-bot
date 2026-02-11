@@ -12,16 +12,16 @@ from telegram.ext import (
 # ================= НАСТРОЙКИ =================
 
 TOKEN = os.getenv("BOT_TOKEN")  # Берём токен из Railway
-CHANNEL_ID = -1001234567890  # <-- ВСТАВЬ ID КАНАЛА
+CHANNEL_ID = -1003814033445
 ROUND_DURATION = 7 * 60 * 60  # 7 часов
 MIN_PLAYERS = 2
 
 if not TOKEN:
-    raise ValueError("BOT_TOKEN не найден в переменных Railway!")
+    raise ValueError("Переменная BOT_TOKEN не найдена в Railway!")
 
 # ================= ЛОГИ =================
 
-logging.basicConfig(level=logging.WARNING)
+logging.basicConfig(level=logging.INFO)
 
 # ================= СОСТОЯНИЕ ИГРЫ =================
 
@@ -141,6 +141,7 @@ async def end_round(context: ContextTypes.DEFAULT_TYPE):
         game_state["active"] = False
         return
 
+    # Добавляем бонусы за приглашения
     for p in game_state["players"].values():
         p["score"] += p["referrals"] * 5
 
@@ -150,6 +151,7 @@ async def end_round(context: ContextTypes.DEFAULT_TYPE):
         reverse=True
     )
 
+    # ======= ФИНАЛ =======
     if game_state["round"] >= 4:
         winner = sorted_players[0][1]
 
@@ -174,6 +176,7 @@ async def end_round(context: ContextTypes.DEFAULT_TYPE):
         context.job_queue.run_once(start_new_tournament, 30)
         return
 
+    # ======= Проходит 50% игроков =======
     survivors = dict(sorted_players[:max(1, len(sorted_players)//2)])
 
     game_state["players"] = survivors
@@ -207,8 +210,8 @@ async def update_post(context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML",
                 reply_markup=main_keyboard()
             )
-        except:
-            pass
+        except Exception as e:
+            logging.warning(f"Ошибка редактирования сообщения: {e}")
     else:
         msg = await context.bot.send_message(
             chat_id=CHANNEL_ID,
@@ -220,18 +223,12 @@ async def update_post(context: ContextTypes.DEFAULT_TYPE):
 
 # ================= ЗАПУСК =================
 
-async def on_startup(application):
-    await application.bot.initialize()
-    await update_post(application)
-
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(join_callback, pattern="join"))
     app.add_handler(CallbackQueryHandler(referral_callback, pattern="ref"))
-
-    app.post_init = on_startup
 
     print("Бот запущен...")
     app.run_polling(drop_pending_updates=True)
