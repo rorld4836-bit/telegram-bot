@@ -140,9 +140,12 @@ async def start_round(context):
         user = await context.bot.get_chat(uid)
         msg = await context.bot.send_message(
             chat_id=f"@{CHANNEL}",
-            text=f"⚔️ Раунд {STATE['round']}\n@{user.username or user.first_name}",
+            text=f"⚔️ *Раунд {STATE['round']}*\n\nДва отважных воина сражаются!\n\n"
+                 f"@{user.username or user.first_name} VS @{user.username or user.first_name}\n\n"
+                 f"⏳ Время: 14 часов\n"
+                 f"🔥 Оставшееся время: 9 часов\n",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("👍 Проголосовать", callback_data=f"vote:{uid}")
+                InlineKeyboardButton("👍 Проголосовать за @username", callback_data=f"vote:{uid}")
             ]])
         )
         STATE["posts"][str(uid)] = msg.message_id
