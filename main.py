@@ -58,7 +58,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     uid = user.id
 
-    # Создание профиля если нет
     if uid not in STATE["user_data"]:
         STATE["user_data"][uid] = {
             "votes": 0,
@@ -67,7 +66,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "referrals": []
         }
 
-    # Обработка реферала
+    # обработка реферала
     if context.args:
         referrer_id = context.args[0]
 
@@ -109,6 +108,51 @@ async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
+# ================= УЧАСТВОВАТЬ =================
+async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    uid = q.from_user.id
+
+    if uid in STATE["participants"]:
+        await q.answer("Ты уже участвуешь!", show_alert=True)
+        return
+
+    STATE["participants"].append(uid)
+
+    if uid not in STATE["user_data"]:
+        STATE["user_data"][uid] = {
+            "votes": 0,
+            "invites": 0,
+            "wins": 0,
+            "referrals": []
+        }
+
+    save_state()
+    await q.answer("Ты в турнире!")
+
+# ================= НАЙТИ СЕБЯ =================
+async def find_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    uid = str(q.from_user.id)
+
+    msg_id = STATE["posts"].get(uid)
+
+    if not msg_id:
+        await q.answer("Ты сейчас не участвуешь", show_alert=True)
+        return
+
+    await q.message.reply_text(
+        "🔍 Твоя битва:",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton(
+                "➡️ Перейти к битве",
+                url=f"https://t.me/{CHANNEL}/{msg_id}"
+            )
+        ]])
+    )
+
+    await q.answer()
+
 # ================= ПРИГЛАСИТЬ =================
 async def invite(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -125,8 +169,15 @@ async def invite(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = update.callback_query.data
 
-    if data == "rules":
+    if data == "join":
+        await join(update, context)
+
+    elif data == "rules":
         await rules(update, context)
+
+    elif data == "find_me":
+        await find_me(update, context)
+
     elif data == "invite":
         await invite(update, context)
 
