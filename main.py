@@ -20,15 +20,10 @@ if not TOKEN:
 
 CHANNEL_LINK = "https://t.me/battlertf"
 CHANNEL_ID = -1003814033445
+
 ROUND_TIME = 7 * 60 * 60
 UPDATE_TIME = 30
-
-ROUND_REQUIREMENTS = {
-    1: 0,
-    2: 10,
-    3: 20,
-    4: 30
-}
+CREATE_BATTLE_INTERVAL = 600
 
 logging.basicConfig(level=logging.INFO)
 
@@ -59,7 +54,8 @@ CREATE TABLE IF NOT EXISTS battles (
     p1 INTEGER,
     p2 INTEGER,
     message_id INTEGER,
-    active INTEGER DEFAULT 1
+    active INTEGER DEFAULT 1,
+    winner INTEGER DEFAULT NULL
 )
 """)
 
@@ -71,6 +67,10 @@ CREATE TABLE IF NOT EXISTS game (
 """)
 
 cursor.execute("INSERT OR IGNORE INTO game (id, round) VALUES (1,1)")
+
+cursor.execute("CREATE INDEX IF NOT EXISTS idx_players_alive ON players(alive)")
+cursor.execute("CREATE INDEX IF NOT EXISTS idx_battles_active ON battles(active)")
+
 conn.commit()
 
 # ================= MENU =================
@@ -89,8 +89,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     args = context.args
 
-    cursor.execute("INSERT OR IGNORE INTO players (user_id, username) VALUES (?,?)",
-                   (user.id, user.username))
+    cursor.execute(
+        "INSERT OR IGNORE INTO players (user_id, username) VALUES (?,?)",
+        (user.id, user.username)
+    )
     conn.commit()
 
     if args:
@@ -100,7 +102,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 cursor.execute("SELECT 1 FROM referrals WHERE invited_id=?", (user.id,))
                 if not cursor.fetchone():
                     cursor.execute("INSERT INTO referrals VALUES (?,?)", (ref_id, user.id))
-                    cursor.execute("UPDATE players SET invited=invited+1 WHERE user_id=?", (ref_id,))
+                    cursor.execute(
+                        "UPDATE players SET invited=invited+1 WHERE user_id=?",
+                        (ref_id,)
+                    )
                     conn.commit()
         except:
             pass
@@ -120,7 +125,11 @@ async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     await query.message.reply_text(
-        f"📜 <b>ПРАВИЛА ТУРНИРА</b>\n\n"
+        f"📜 <b>ПРАВИЛА</b>\n\n"
+        f"• Учитываются приглашения\n"
+        f"• Победитель один\n"
+        f"• 4 раунда\n"
+        f"• Награда: 50–500 ⭐ (зависит от активности)\n\n"
         f"Битвы проходят здесь:\n{CHANNEL_LINK}",
         parse_mode="HTML"
     )
@@ -128,6 +137,13 @@ async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ================= CREATE BATTLE =================
 
 async def create_battle(context: ContextTypes.DEFAULT_TYPE):
+
+    cursor.execute("SELECT COUNT(*) FROM battles WHERE active=1")
+    active_count = cursor.fetchone()[0]
+
+    # защита от перегрузки (макс 10 параллельных битв)
+    if active_count >= 10:
+        return
 
     cursor.execute("SELECT user_id FROM players WHERE alive=1")
     players = [x[0] for x in cursor.fetchall()]
@@ -139,7 +155,7 @@ async def create_battle(context: ContextTypes.DEFAULT_TYPE):
 
     msg = await context.bot.send_message(
         chat_id=CHANNEL_ID,
-        text="⏳ Загрузка битвы..."
+        text="⏳ Создание битвы..."
     )
 
     cursor.execute(
@@ -148,17 +164,15 @@ async def create_battle(context: ContextTypes.DEFAULT_TYPE):
     )
     conn.commit()
 
-    context.job_queue.run_repeating(update_battle, UPDATE_TIME)
+# ================= UPDATE BATTLES =================
 
-# ================= UPDATE BATTLE =================
-
-async def update_battle(context: ContextTypes.DEFAULT_TYPE):
-
-    cursor.execute("SELECT id, p1, p2, message_id FROM battles WHERE active=1")
-    battles = cursor.fetchall()
+async def update_battles(context: ContextTypes.DEFAULT_TYPE):
 
     cursor.execute("SELECT round FROM game WHERE id=1")
     round_num = cursor.fetchone()[0]
+
+    cursor.execute("SELECT id, p1, p2, message_id FROM battles WHERE active=1")
+    battles = cursor.fetchall()
 
     for battle in battles:
         b_id, p1, p2, message_id = battle
@@ -172,12 +186,38 @@ async def update_battle(context: ContextTypes.DEFAULT_TYPE):
         if not u1 or not u2:
             continue
 
-        text = (
-            "🔥 <b>БИТВА НИКОВ</b> 🔥\n\n"
-            f"🏆 Раунд: {round_num}\n\n"
-            f"@{u1[0]} VS @{u2[0]}\n\n"
-            f"Приглашено: {u1[1]} vs {u2[1]}"
-        )
+        # Определение победителя после 4 раунда
+        if round_num >= 4:
+            if u1[1] > u2[1]:
+                winner = p1
+            elif u2[1] > u1[1]:
+                winner = p2
+            else:
+                winner = random.choice([p1, p2])
+
+            cursor.execute(
+                "UPDATE battles SET active=0, winner=? WHERE id=?",
+                (winner, b_id)
+            )
+            conn.commit()
+
+            winner_username = u1[0] if winner == p1 else u2[0]
+
+            text = (
+                "🏆 <b>БИТВА ЗАВЕРШЕНА</b>\n\n"
+                f"Победитель: @{winner_username}\n\n"
+                "Награда: 50–500 ⭐"
+            )
+        else:
+            text = (
+                "🔥 <b>БИТВА НИКОВ</b> 🔥\n\n"
+                f"🏆 Раунд: {round_num}\n\n"
+                f"@{u1[0]} VS @{u2[0]}\n\n"
+                f"📊 Приглашения:\n"
+                f"{u1[0]}: {u1[1]}\n"
+                f"{u2[0]}: {u2[1]}\n\n"
+                f"Канал: {CHANNEL_LINK}"
+            )
 
         try:
             await context.bot.edit_message_text(
@@ -199,7 +239,11 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(rules, pattern="rules"))
 
-    app.job_queue.run_repeating(create_battle, 600)
+    # создание битв
+    app.job_queue.run_repeating(create_battle, CREATE_BATTLE_INTERVAL)
+
+    # обновление (ОДИН раз, без зацикливания)
+    app.job_queue.run_repeating(update_battles, UPDATE_TIME)
 
     app.run_polling()
 
