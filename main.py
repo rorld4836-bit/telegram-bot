@@ -9,11 +9,13 @@ from telegram.ext import (
     ContextTypes
 )
 
-TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = -1003814033445
+# Берём токен ТОЛЬКО из Railway
+TOKEN = os.environ.get("BOT_TOKEN")
 
 if not TOKEN:
-    raise ValueError("BOT_TOKEN не найден!")
+    raise ValueError("❌ BOT_TOKEN не найден в переменных Railway!")
+
+CHANNEL_ID = -1003814033445
 
 logging.basicConfig(level=logging.INFO)
 
@@ -24,12 +26,11 @@ game_state = {
 }
 
 # ==========================
-# МЕНЮ БОТА
+# МЕНЮ
 # ==========================
 
-def bot_menu(bot_username):
+def bot_menu():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🔥 Перейти в канал", url="https://t.me/БИТВА_НИКОВ")],
         [InlineKeyboardButton("⚔️ Участвовать", callback_data="join")],
         [InlineKeyboardButton("👤 Найти себя", callback_data="me")],
         [InlineKeyboardButton("📜 Правила", callback_data="rules")],
@@ -37,12 +38,11 @@ def bot_menu(bot_username):
     ])
 
 # ==========================
-# /START
+# START
 # ==========================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    bot_username = context.bot.username
 
     await update.message.reply_text(
         f"""
@@ -50,18 +50,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 Добро пожаловать, {user.first_name}!
 
-⚔️ Участвуй в турнире
-👥 Приглашай друзей
-🏆 Побеждай
-
-👇 Всё управление здесь
+Нажми кнопку ниже, чтобы участвовать 👇
 """,
         parse_mode="HTML",
-        reply_markup=bot_menu(bot_username)
+        reply_markup=bot_menu()
     )
 
 # ==========================
-# УЧАСТИЕ
+# JOIN
 # ==========================
 
 async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -82,7 +78,7 @@ async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update_channel_post(context)
 
 # ==========================
-# НАЙТИ СЕБЯ
+# FIND ME
 # ==========================
 
 async def find_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -97,11 +93,11 @@ async def find_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
     score = game_state["players"][user.id]["score"]
 
     await query.message.reply_text(
-        f"👤 Ты в игре!\n🎯 Твои очки: {score}"
+        f"👤 Ты участвуешь!\n🎯 Твои очки: {score}"
     )
 
 # ==========================
-# ПРАВИЛА
+# RULES
 # ==========================
 
 async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -112,9 +108,9 @@ async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
         """
 📜 <b>ПРАВИЛА</b>
 
-1️⃣ Турнир — 4 раунда
-2️⃣ Раунд длится 7 часов
-3️⃣ После каждого раунда часть игроков выбывает
+1️⃣ Турнир проходит в 4 раунда
+2️⃣ Каждый раунд длится 7 часов
+3️⃣ После раунда часть игроков выбывает
 4️⃣ Побеждает лучший
 
 🔥 Удачи!
@@ -123,7 +119,7 @@ async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ==========================
-# РЕФЕРАЛКА
+# REFERRAL
 # ==========================
 
 async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -148,8 +144,7 @@ async def update_channel_post(context):
         text = """
 🔥 <b>БИТВА НИКОВ</b> 🔥
 
-⏳ Ожидаем игроков...
-Минимум 2 участника
+⏳ Ожидаем минимум 2 игроков...
 """
     else:
         p1 = players[0]["name"]
@@ -164,8 +159,6 @@ async def update_channel_post(context):
 ⚔️ {p1} VS {p2}
 
 ⏳ Время раунда: 7 часов
-
-👇 Жми кнопку ниже
 """
 
     if game_state["message_id"]:
@@ -199,7 +192,7 @@ def main():
     app.add_handler(CallbackQueryHandler(rules, pattern="rules"))
     app.add_handler(CallbackQueryHandler(referral, pattern="ref"))
 
-    print("Бот запущен...")
+    print("✅ Бот запущен")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
