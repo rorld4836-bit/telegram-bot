@@ -17,7 +17,7 @@ MIN_PLAYERS = 2
 
 # ================= ЛОГИ =================
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.WARNING)
 
 # ================= СОСТОЯНИЕ ИГРЫ =================
 
@@ -137,7 +137,6 @@ async def end_round(context: ContextTypes.DEFAULT_TYPE):
         game_state["active"] = False
         return
 
-    # Бонус за приглашения
     for p in game_state["players"].values():
         p["score"] += p["referrals"] * 5
 
@@ -147,7 +146,6 @@ async def end_round(context: ContextTypes.DEFAULT_TYPE):
         reverse=True
     )
 
-    # ======= ФИНАЛ =======
     if game_state["round"] >= 4:
         winner = sorted_players[0][1]
 
@@ -172,7 +170,6 @@ async def end_round(context: ContextTypes.DEFAULT_TYPE):
         context.job_queue.run_once(start_new_tournament, 30)
         return
 
-    # ======= ПРОХОДЯТ 50% =======
     survivors = dict(sorted_players[:max(1, len(sorted_players)//2)])
 
     game_state["players"] = survivors
@@ -190,23 +187,7 @@ async def end_round(context: ContextTypes.DEFAULT_TYPE):
 # ================= НОВЫЙ ТУРНИР =================
 
 async def start_new_tournament(context: ContextTypes.DEFAULT_TYPE):
-
-    msg = await context.bot.send_message(
-        chat_id=CHANNEL_ID,
-        text="""
-🚀 <b>НОВЫЙ ТУРНИР БИТВЫ НИКОВ!</b> 🚀
-
-⚔️ 4 раунда по 7 часов
-👑 Только один победитель
-🎁 Рефералы дают бонус
-
-Жми кнопку ниже 👇
-""",
-        parse_mode="HTML",
-        reply_markup=main_keyboard()
-    )
-
-    game_state["message_id"] = msg.message_id
+    await update_post(context)
 
 # ================= ОБНОВЛЕНИЕ ПОСТА =================
 
@@ -235,6 +216,9 @@ async def update_post(context: ContextTypes.DEFAULT_TYPE):
 
 # ================= ЗАПУСК =================
 
+async def on_startup(app):
+    await update_post(app)
+
 def main():
     app = ApplicationBuilder().token(TOKEN).build()
 
@@ -242,8 +226,10 @@ def main():
     app.add_handler(CallbackQueryHandler(join_callback, pattern="join"))
     app.add_handler(CallbackQueryHandler(referral_callback, pattern="ref"))
 
+    app.post_init = on_startup
+
     print("Бот запущен...")
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
