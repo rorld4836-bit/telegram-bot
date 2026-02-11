@@ -1,13 +1,7 @@
-import os
-import json
+import logging
 import random
-from datetime import datetime, timedelta
-
-from telegram import (
-    Update,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton
-)
+from datetime import datetime
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -17,296 +11,227 @@ from telegram.ext import (
 
 # ================= НАСТРОЙКИ =================
 
-TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_USERNAME = "battlertf"
-ROUND_DURATION = 7 * 60 * 60
+TOKEN = "YOUR_BOT_TOKEN"
+CHANNEL_ID = -1001234567890  # <-- ВСТАВЬ ID КАНАЛА
+ROUND_DURATION = 7 * 60 * 60  # 7 часов
 MIN_PLAYERS = 2
-MAX_PLAYERS = 16
-STATE_FILE = "state.json"
 
-# ================= СОСТОЯНИЕ =================
+# ================= ЛОГИ =================
 
-STATE = {
-    "participants": [],
-    "round_players": [],
-    "eliminated": [],
-    "active_round": False,
-    "round_number": 0,
-    "battles": [],
-    "votes": {},
-    "battle_messages": {},
-    "round_end_time": None
+logging.basicConfig(level=logging.INFO)
+
+# ================= СОСТОЯНИЕ ИГРЫ =================
+
+game_state = {
+    "players": {},
+    "round": 1,
+    "active": False,
+    "message_id": None
 }
 
-# ================= SAVE / LOAD =================
+# ================= КРАСИВЫЙ ПОСТ =================
 
-def save_state():
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(STATE, f)
+def build_post_text():
+    players_text = ""
 
-def load_state():
-    if os.path.exists(STATE_FILE):
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-            STATE.update(json.load(f))
+    if game_state["players"]:
+        for p in game_state["players"].values():
+            players_text += f"⚔️ {p['nickname']} | Очки: {p['score']} | ❤️ {p['referrals']}\n"
+    else:
+        players_text = "Пока нет участников"
 
-# ================= МЕНЮ =================
+    return f"""
+🔥 <b>БИТВА НИКОВ</b> 🔥
 
-def main_menu():
+🏁 Раунд: {game_state['round']} / 4
+👥 Игроков: {len(game_state['players'])}
+
+{players_text}
+
+⏳ Раунд длится 7 часов
+👑 В финале останется только один
+🎁 Рефералы усиливают твой ник
+
+Нажми «Участвовать» ниже 👇
+"""
+
+def main_keyboard():
     return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("⚔️ Участвовать", callback_data="join"),
-            InlineKeyboardButton("🔍 Найти себя", callback_data="find_me")
-        ],
-        [
-            InlineKeyboardButton("📜 Правила", callback_data="rules"),
-            InlineKeyboardButton("🔗 Пригласить", callback_data="invite")
-        ]
+        [InlineKeyboardButton("⚔️ Участвовать", callback_data="join")],
+        [InlineKeyboardButton("🔗 Реферальная ссылка", callback_data="ref")]
     ])
 
-# ================= /START =================
+# ================= СТАРТ =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    args = context.args
+
+    # Реферальная логика
+    if args:
+        referrer_id = int(args[0])
+        user_id = update.effective_user.id
+
+        if referrer_id != user_id and referrer_id in game_state["players"]:
+            game_state["players"][referrer_id]["referrals"] += 1
+
     await update.message.reply_text(
-        "🔥 Добро пожаловать в Битву Ников!\n\n"
-        f"Турнир проходит здесь:\n👉 https://t.me/{CHANNEL_USERNAME}",
-        reply_markup=main_menu()
+        "🔥 Добро пожаловать в БИТВУ НИКОВ!\n\n"
+        "Переходи в канал и участвуй!"
     )
 
-# ================= JOIN =================
+# ================= УЧАСТИЕ =================
 
-async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
+async def join_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user = query.from_user
+    await query.answer()
 
-    user_id = q.from_user.id
-
-    # Если турнир идёт
-    if STATE["active_round"]:
-
-        if user_id in STATE["round_players"]:
-            await q.message.reply_text("🔥 Ты уже проходишь дальше в турнире!")
-            return
-
-        if user_id in STATE["eliminated"]:
-            await q.message.reply_text("❌ Ты выбыл. Жди следующий турнир.")
-            return
-
-        if user_id not in STATE["participants"]:
-            STATE["participants"].append(user_id)
-            save_state()
-            await q.message.reply_text("✅ Ты зарегистрирован на следующий турнир!")
-            return
-
-    # Если турнир не идёт
-    if user_id in STATE["participants"]:
-        await q.message.reply_text("Ты уже зарегистрирован.")
+    if user.id in game_state["players"]:
+        await query.answer("Ты уже участвуешь!", show_alert=True)
         return
 
-    STATE["participants"].append(user_id)
-    save_state()
+    game_state["players"][user.id] = {
+        "nickname": user.username or user.first_name,
+        "score": random.randint(1, 100),
+        "referrals": 0
+    }
 
-    await q.message.reply_text("✅ Ты добавлен в турнир!")
+    await query.answer("Ты вступил в турнир!", show_alert=True)
 
-# ================= FIND ME =================
+    if not game_state["active"] and len(game_state["players"]) >= MIN_PLAYERS:
+        game_state["active"] = True
+        context.job_queue.run_once(end_round, ROUND_DURATION)
 
-async def find_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
+    await update_post(context)
 
-    user_id = q.from_user.id
+# ================= РЕФЕРАЛКА =================
 
-    for battle_id, battle in enumerate(STATE["battles"]):
-        if user_id in battle:
-            msg_id = STATE["battle_messages"].get(str(battle_id))
-            if msg_id:
-                link = f"https://t.me/{CHANNEL_USERNAME}/{msg_id}"
-                await q.message.reply_text(
-                    "Твоя битва:",
-                    reply_markup=InlineKeyboardMarkup([
-                        [InlineKeyboardButton("Перейти к битве", url=link)]
-                    ])
-                )
-                return
+async def referral_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    user = query.from_user
+    await query.answer()
 
-    await q.message.reply_text("Ты сейчас не в активной битве.")
+    link = f"https://t.me/{context.bot.username}?start={user.id}"
 
-# ================= ПРАВИЛА =================
-
-async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-
-    await q.message.reply_text(
-        "📜 ПРАВИЛА БИТВЫ НИКОВ\n\n"
-        "• Раунд длится 7 часов\n"
-        "• 1 пользователь = 1 голос\n"
-        "• Нельзя голосовать дважды\n"
-        "• Проигравшие ждут следующий турнир\n"
-        "• В финале всегда 1 победитель\n"
-        "• Конфиденциальность игроков защищена"
+    await query.message.reply_text(
+        f"🔗 Твоя реферальная ссылка:\n{link}"
     )
 
-# ================= INVITE =================
-
-async def invite(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-
-    link = f"https://t.me/{context.bot.username}?start={q.from_user.id}"
-    await q.message.reply_text(f"Твоя реферальная ссылка:\n{link}")
-
-# ================= СТАРТ РАУНДА =================
-
-async def start_round(context: ContextTypes.DEFAULT_TYPE):
-
-    if len(STATE["participants"]) < MIN_PLAYERS:
-        return
-
-    STATE["active_round"] = True
-    STATE["round_number"] += 1
-    STATE["round_players"] = STATE["participants"][:]
-    STATE["eliminated"] = []
-    STATE["battles"] = []
-    STATE["votes"] = {}
-    STATE["battle_messages"] = {}
-
-    players = STATE["round_players"][:]
-    random.shuffle(players)
-
-    for i in range(0, len(players), 2):
-        if i + 1 < len(players):
-            STATE["battles"].append([players[i], players[i+1]])
-
-    for battle_id, battle in enumerate(STATE["battles"]):
-
-        text = (
-            f"🔥 Битвы Ников\n"
-            f"Раунд {STATE['round_number']}\n\n"
-            f"⚔️ Два отважных воина сходятся в битве!\n\n"
-            f"<a href='tg://user?id={battle[0]}'>Игрок</a> "
-            f"VS "
-            f"<a href='tg://user?id={battle[1]}'>Игрок</a>\n\n"
-            f"⏳ Время: 7 часов"
-        )
-
-        keyboard = InlineKeyboardMarkup([
-            [
-                InlineKeyboardButton("👍 Голос 1", callback_data=f"vote_{battle_id}_0"),
-                InlineKeyboardButton("👍 Голос 2", callback_data=f"vote_{battle_id}_1")
-            ]
-        ])
-
-        msg = await context.bot.send_message(
-            chat_id=f"@{CHANNEL_USERNAME}",
-            text=text,
-            reply_markup=keyboard,
-            parse_mode="HTML"
-        )
-
-        STATE["battle_messages"][str(battle_id)] = msg.message_id
-        STATE["votes"][str(battle_id)] = {}
-
-    STATE["round_end_time"] = (datetime.utcnow() + timedelta(seconds=ROUND_DURATION)).isoformat()
-    save_state()
-
-    context.job_queue.run_once(end_round, ROUND_DURATION)
-
-# ================= ГОЛОСОВАНИЕ =================
-
-async def vote(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-
-    data = q.data.split("_")
-    battle_id = data[1]
-    choice = int(data[2])
-    user_id = q.from_user.id
-
-    if user_id in STATE["votes"][battle_id]:
-        await q.answer("Ты уже голосовал!", show_alert=True)
-        return
-
-    battle = STATE["battles"][int(battle_id)]
-
-    if battle[choice] == user_id:
-        await q.answer("Нельзя голосовать за себя!", show_alert=True)
-        return
-
-    STATE["votes"][battle_id][user_id] = choice
-    save_state()
-
-# ================= ЗАВЕРШЕНИЕ РАУНДА =================
+# ================= РАУНДЫ =================
 
 async def end_round(context: ContextTypes.DEFAULT_TYPE):
 
-    winners = []
+    if len(game_state["players"]) < MIN_PLAYERS:
+        game_state["active"] = False
+        return
 
-    for battle_id, battle in enumerate(STATE["battles"]):
-        votes = STATE["votes"].get(str(battle_id), {})
+    # бонус за рефералов
+    for p in game_state["players"].values():
+        p["score"] += p["referrals"] * 5
 
-        count0 = sum(1 for v in votes.values() if v == 0)
-        count1 = sum(1 for v in votes.values() if v == 1)
+    sorted_players = sorted(
+        game_state["players"].items(),
+        key=lambda x: x[1]["score"],
+        reverse=True
+    )
 
-        winner = battle[0] if count0 >= count1 else battle[1]
-        loser = battle[1] if winner == battle[0] else battle[0]
+    # ======= ФИНАЛ =======
+    if game_state["round"] >= 4:
+        winner = sorted_players[0][1]
 
-        winners.append(winner)
-        STATE["eliminated"].append(loser)
-
-    STATE["participants"] = winners
-    STATE["round_players"] = winners
-    STATE["active_round"] = False
-
-    if len(winners) == 1:
         await context.bot.send_message(
-            chat_id=f"@{CHANNEL_USERNAME}",
-            text=f"🏆 Победитель турнира!\n\n<a href='tg://user?id={winners[0]}'>Чемпион</a>",
+            chat_id=CHANNEL_ID,
+            text=f"""
+🏆 <b>ФИНАЛ ТУРНИРА!</b> 🏆
+
+👑 Победитель:
+<b>{winner['nickname']}</b>
+
+🔥 Новый турнир начнётся через 30 секунд...
+""",
             parse_mode="HTML"
         )
 
-        STATE["round_number"] = 0
-        STATE["participants"] = []
-        STATE["round_players"] = []
-        STATE["eliminated"] = []
+        # Сброс
+        game_state["players"] = {}
+        game_state["round"] = 1
+        game_state["active"] = False
+        game_state["message_id"] = None
 
+        context.job_queue.run_once(start_new_tournament, 30)
+        return
+
+    # ======= ПРОХОДЯТ 50% =======
+    survivors = dict(sorted_players[:max(1, len(sorted_players)//2)])
+
+    game_state["players"] = survivors
+    game_state["round"] += 1
+
+    await context.bot.send_message(
+        chat_id=CHANNEL_ID,
+        text=f"🔥 Начался раунд {game_state['round']}!\nИгроков осталось: {len(survivors)}",
+        parse_mode="HTML"
+    )
+
+    context.job_queue.run_once(end_round, ROUND_DURATION)
+    await update_post(context)
+
+# ================= НОВЫЙ ТУРНИР =================
+
+async def start_new_tournament(context: ContextTypes.DEFAULT_TYPE):
+
+    msg = await context.bot.send_message(
+        chat_id=CHANNEL_ID,
+        text="""
+🚀 <b>НОВЫЙ ТУРНИР БИТВЫ НИКОВ!</b> 🚀
+
+⚔️ 4 раунда по 7 часов
+👑 Только один победитель
+🎁 Рефералы дают бонус
+
+Жми кнопку ниже 👇
+""",
+        parse_mode="HTML",
+        reply_markup=main_keyboard()
+    )
+
+    game_state["message_id"] = msg.message_id
+
+# ================= ОБНОВЛЕНИЕ ПОСТА =================
+
+async def update_post(context: ContextTypes.DEFAULT_TYPE):
+    text = build_post_text()
+
+    if game_state["message_id"]:
+        try:
+            await context.bot.edit_message_text(
+                chat_id=CHANNEL_ID,
+                message_id=game_state["message_id"],
+                text=text,
+                parse_mode="HTML",
+                reply_markup=main_keyboard()
+            )
+        except:
+            pass
     else:
-        await start_round(context)
+        msg = await context.bot.send_message(
+            chat_id=CHANNEL_ID,
+            text=text,
+            parse_mode="HTML",
+            reply_markup=main_keyboard()
+        )
+        game_state["message_id"] = msg.message_id
 
-    save_state()
-
-# ================= ROUTER =================
-
-async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = update.callback_query.data
-
-    if data == "join":
-        await join(update, context)
-    elif data == "find_me":
-        await find_me(update, context)
-    elif data == "rules":
-        await rules(update, context)
-    elif data == "invite":
-        await invite(update, context)
-    elif data.startswith("vote_"):
-        await vote(update, context)
-
-# ================= MAIN =================
+# ================= ЗАПУСК =================
 
 def main():
-    load_state()
-
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(router))
+    app.add_handler(CallbackQueryHandler(join_callback, pattern="join"))
+    app.add_handler(CallbackQueryHandler(referral_callback, pattern="ref"))
 
-    app.job_queue.run_repeating(
-        lambda ctx: start_round(ctx) if not STATE["active_round"] else None,
-        interval=60,
-        first=10
-    )
-
-    print("Турнирный движок запущен")
+    print("Бот запущен...")
     app.run_polling()
 
 if __name__ == "__main__":
