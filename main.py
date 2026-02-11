@@ -10,9 +10,16 @@ from telegram.ext import (
     ContextTypes,
 )
 
+print("БОТ ЗАПУЩЕН")  # ← проверка старта
+
 TOKEN = os.getenv("BOT_TOKEN")
+
+if not TOKEN:
+    print("❌ BOT_TOKEN не найден!")
+    exit()
+
 CHANNEL_LINK = "https://t.me/battlertf"
-CHANNEL_ID = -100XXXXXXXXXX  # вставь id канала
+CHANNEL_ID = -100XXXXXXXXXX  # вставь реальный id
 ROUND_TIME = 7 * 60 * 60
 UPDATE_TIME = 30
 
@@ -82,6 +89,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     args = context.args
 
+    cursor.execute("INSERT OR IGNORE INTO players (user_id, username) VALUES (?,?)",
+                   (user.id, user.username))
+    conn.commit()
+
     if args:
         try:
             ref_id = int(args[0])
@@ -109,39 +120,8 @@ async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     await query.message.reply_text(
-        f"""
-📜 <b>ПРАВИЛА ТУРНИРА</b>
-
-1️⃣ Каждый участник получает личную ссылку.
-1 приглашённый = 1 участник турнира.
-
-2️⃣ Один человек может быть засчитан только один раз.
-Самоприглашение запрещено.
-
-3️⃣ Все участники находятся в равных условиях.
-Кто пригласил больше людей — тот выше в рейтинге.
-
-4️⃣ Турнир проходит в 4 раунда:
-Раунд 1 — без ограничений  
-Раунд 2 — минимум 10 приглашений  
-Раунд 3 — минимум 20 приглашений  
-Раунд 4 — минимум 30 приглашений  
-
-5️⃣ После 4 раунда определяется один победитель —
-участник с наибольшим количеством приглашений.
-
-🏆 Награда:
-В конце турнира победитель получает подарок звёзд ⭐
-(примерно от 50 до 500 ⭐).
-Размер награды зависит от вашей активности.
-
-🔒 Все данные используются только внутри турнира.
-Бот не запрашивает пароли, коды или личные данные.
-Участие полностью безопасно.
-
-Битвы проходят здесь:
-{CHANNEL_LINK}
-""",
+        f"📜 <b>ПРАВИЛА ТУРНИРА</b>\n\n"
+        f"Битвы проходят здесь:\n{CHANNEL_LINK}",
         parse_mode="HTML"
     )
 
@@ -189,16 +169,14 @@ async def update_battle(context: ContextTypes.DEFAULT_TYPE):
         cursor.execute("SELECT username, invited FROM players WHERE user_id=?", (p2,))
         u2 = cursor.fetchone()
 
+        if not u1 or not u2:
+            continue
+
         text = (
             "🔥 <b>БИТВА НИКОВ</b> 🔥\n\n"
-            f"🏆 Раунд: {round_num}\n"
-            "👥 Участников: 2\n\n"
+            f"🏆 Раунд: {round_num}\n\n"
             f"@{u1[0]} VS @{u2[0]}\n\n"
-            "📊 Количество приглашений:\n"
-            f"Участник 1: {u1[1]}\n"
-            f"Участник 2: {u2[1]}\n\n"
-            "Голосовать 👍\n\n"
-            f"Канал турнира:\n{CHANNEL_LINK}"
+            f"Приглашено: {u1[1]} vs {u2[1]}"
         )
 
         try:
@@ -211,28 +189,9 @@ async def update_battle(context: ContextTypes.DEFAULT_TYPE):
         except:
             pass
 
-# ================= ROUND =================
-
-async def next_round(context: ContextTypes.DEFAULT_TYPE):
-
-    cursor.execute("SELECT round FROM game WHERE id=1")
-    current = cursor.fetchone()[0]
-
-    requirement = ROUND_REQUIREMENTS.get(current, 0)
-
-    cursor.execute("UPDATE players SET alive=0 WHERE invited < ?", (requirement,))
-    cursor.execute("UPDATE game SET round = round + 1 WHERE id=1")
-    conn.commit()
-
-    if current >= 4:
-        await finish(context)
-        return
-
-    context.job_queue.run_once(next_round, ROUND_TIME)
-
 # ================= FINISH =================
 
-async def finish(context):
+async def finish(context: ContextTypes.DEFAULT_TYPE):
 
     cursor.execute("""
     SELECT username, invited FROM players
@@ -245,21 +204,21 @@ async def finish(context):
     if winner:
         await context.bot.send_message(
             chat_id=CHANNEL_ID,
-            text=f"🏆 ПОБЕДИТЕЛЬ ТУРНИРА:\n\n@{winner[0]}\nПриглашено: {winner[1]}"
+            text=f"🏆 ПОБЕДИТЕЛЬ:\n\n@{winner[0]}\nПриглашено: {winner[1]}"
         )
 
 # ================= MAIN =================
 
 def main():
+    print("БОТ ЗАПУЩЕН")
+
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(rules, pattern="rules"))
 
     app.job_queue.run_repeating(create_battle, 600)
-    app.job_queue.run_once(next_round, ROUND_TIME)
 
-    print("🔥 Турнирный бот запущен")
     app.run_polling()
 
 if __name__ == "__main__":
