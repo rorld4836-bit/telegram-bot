@@ -1,6 +1,5 @@
 import logging
 import random
-from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -36,7 +35,11 @@ def build_post_text():
 
     if game_state["players"]:
         for p in game_state["players"].values():
-            players_text += f"⚔️ {p['nickname']} | Очки: {p['score']} | ❤️ {p['referrals']}\n"
+            players_text += (
+                f"⚔️ {p['nickname']} | "
+                f"🎯 Очки: {p['score']} | "
+                f"👥 Пригласил: {p['referrals']}\n"
+            )
     else:
         players_text = "Пока нет участников"
 
@@ -50,15 +53,19 @@ def build_post_text():
 
 ⏳ Раунд длится 7 часов
 👑 В финале останется только один
-🎁 Рефералы усиливают твой ник
+🎁 Каждый приглашённый даёт +5 очков
 
-Нажми «Участвовать» ниже 👇
+Жми кнопку ниже 👇
 """
+
+# ================= КНОПКИ =================
 
 def main_keyboard():
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚔️ Участвовать", callback_data="join")],
-        [InlineKeyboardButton("🔗 Реферальная ссылка", callback_data="ref")]
+        [
+            InlineKeyboardButton("⚔️ Участвовать", callback_data="join"),
+            InlineKeyboardButton("📩 Пригласить", callback_data="ref")
+        ]
     ])
 
 # ================= СТАРТ =================
@@ -66,13 +73,18 @@ def main_keyboard():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     args = context.args
 
-    # Реферальная логика
     if args:
-        referrer_id = int(args[0])
-        user_id = update.effective_user.id
+        try:
+            referrer_id = int(args[0])
+            user_id = update.effective_user.id
 
-        if referrer_id != user_id and referrer_id in game_state["players"]:
-            game_state["players"][referrer_id]["referrals"] += 1
+            if (
+                referrer_id != user_id
+                and referrer_id in game_state["players"]
+            ):
+                game_state["players"][referrer_id]["referrals"] += 1
+        except:
+            pass
 
     await update.message.reply_text(
         "🔥 Добро пожаловать в БИТВУ НИКОВ!\n\n"
@@ -114,7 +126,7 @@ async def referral_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     link = f"https://t.me/{context.bot.username}?start={user.id}"
 
     await query.message.reply_text(
-        f"🔗 Твоя реферальная ссылка:\n{link}"
+        f"📩 Твоя реферальная ссылка:\n\n{link}"
     )
 
 # ================= РАУНДЫ =================
@@ -125,7 +137,7 @@ async def end_round(context: ContextTypes.DEFAULT_TYPE):
         game_state["active"] = False
         return
 
-    # бонус за рефералов
+    # Бонус за приглашения
     for p in game_state["players"].values():
         p["score"] += p["referrals"] * 5
 
@@ -152,7 +164,6 @@ async def end_round(context: ContextTypes.DEFAULT_TYPE):
             parse_mode="HTML"
         )
 
-        # Сброс
         game_state["players"] = {}
         game_state["round"] = 1
         game_state["active"] = False
