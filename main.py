@@ -28,7 +28,7 @@ STATE = {
     "participants": [],
     "posts": {},      # user_id -> message_id
     "votes": {},      # message_id -> [user_id]
-    "user_data": {}   # user_id -> { 'votes': 0, 'invites': 0, 'wins': 0 }
+    "user_data": {},  # user_id -> { 'votes': 0, 'invites': 0, 'wins': 0, 'referrals': [] }
 }
 
 # ===== SAVE / LOAD =====
@@ -54,7 +54,8 @@ def main_menu():
             InlineKeyboardButton("📜 Правила", callback_data="rules")
         ],
         [
-            InlineKeyboardButton("🔍 Найти себя", callback_data="find_me")
+            InlineKeyboardButton("🔍 Найти себя", callback_data="find_me"),
+            InlineKeyboardButton("🔗 Пригласить", callback_data="invite")
         ]
     ])
 
@@ -106,7 +107,7 @@ async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     STATE["participants"].append(uid)
-    STATE["user_data"][uid] = {'votes': 0, 'invites': 0, 'wins': 0}  # инициализация статистики
+    STATE["user_data"][uid] = {'votes': 0, 'invites': 0, 'wins': 0, 'referrals': []}  # инициализация статистики
     save_state()
     await q.answer("Ты в битве!")
 
@@ -218,6 +219,33 @@ async def find_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await q.answer()
 
+# ===== ПРИГЛАСИТЬ (Реферальная программа) =====
+async def invite(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    uid = q.from_user.id
+    referral_link = f"https://t.me/{context.bot.username}?start={uid}"  # Создаём ссылку для приглашений
+
+    await q.answer("Ссылка для приглашения отправлена!")
+    await q.message.reply_text(
+        f"🔗 Ссылка для приглашения:\n{referral_link}",
+        reply_markup=main_menu()
+    )
+
+# ===== ОБРАБОТКА РЕФЕРАЛОВ =====
+async def process_referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.text.split('?start=')[1]
+    if user_id.isdigit():
+        referrer_id = int(user_id)
+
+        if referrer_id not in STATE["user_data"]:
+            STATE["user_data"][referrer_id] = {'votes': 0, 'invites': 0, 'wins': 0, 'referrals': []}
+
+        STATE["user_data"][referrer_id]['invites'] += 1
+        STATE["user_data"][referrer_id]['referrals'].append(update.message.from_user.id)
+        save_state()
+
+        await update.message.reply_text("Ты был приглашён! Удачи в турнире!")
+
 # ===== ROUTER =====
 async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = update.callback_query.data
@@ -227,6 +255,8 @@ async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await rules(update, context)
     elif data == "find_me":
         await find_me(update, context)
+    elif data == "invite":
+        await invite(update, context)
     elif data.startswith("vote"):
         await vote(update, context)
 
@@ -236,6 +266,7 @@ def main():
     app = ApplicationBuilder().token(TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CallbackQueryHandler(router))
+    app.add_handler(MessageHandler(filters.TEXT & filters.regex(r"^/start=\d+$"), process_referral))  # Обработка рефералов
     app.run_polling()
 
 if __name__ == "__main__":
