@@ -10,7 +10,7 @@ from telegram.ext import (
     ContextTypes,
 )
 
-print("БОТ ЗАПУЩЕН")  # ← проверка старта
+print("БОТ ЗАПУЩЕН")
 
 TOKEN = os.getenv("BOT_TOKEN")
 
@@ -19,7 +19,7 @@ if not TOKEN:
     exit()
 
 CHANNEL_LINK = "https://t.me/battlertf"
-CHANNEL_ID = -100XXXXXXXXXX  # вставь реальный id
+CHANNEL_ID = -1003814033445
 ROUND_TIME = 7 * 60 * 60
 UPDATE_TIME = 30
 
@@ -188,24 +188,6 @@ async def update_battle(context: ContextTypes.DEFAULT_TYPE):
             )
         except:
             pass
-
-# ================= FINISH =================
-
-async def finish(context: ContextTypes.DEFAULT_TYPE):
-
-    cursor.execute("""
-    SELECT username, invited FROM players
-    WHERE alive=1
-    ORDER BY invited DESC
-    LIMIT 1
-    """)
-    winner = cursor.fetchone()
-
-    if winner:
-        await context.bot.send_message(
-            chat_id=CHANNEL_ID,
-            text=f"🏆 ПОБЕДИТЕЛЬ:\n\n@{winner[0]}\nПриглашено: {winner[1]}"
-        )
 
 # ================= MAIN =================
 
