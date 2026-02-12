@@ -1,6 +1,7 @@
 import os
 import logging
 import sqlite3
+import asyncio
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -12,9 +13,7 @@ from telegram.ext import (
 )
 
 TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = -1003814033445
-GROUP_LINK = "https://t.me/battlertf"
-ROUND_TIME = 7 * 60 * 60
+CHANNEL_ID = -1003814033445  # ТВОЙ ID КАНАЛА
 
 logging.basicConfig(level=logging.INFO)
 
@@ -29,33 +28,32 @@ cursor = conn.cursor()
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS players (
     user_id INTEGER PRIMARY KEY,
-    username TEXT,
-    invited INTEGER DEFAULT 0,
-    alive INTEGER DEFAULT 1
+    username TEXT
 )
 """)
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS votes (
     voter_id INTEGER,
-    battle_message INTEGER,
-    UNIQUE(voter_id, battle_message)
+    battle_id INTEGER,
+    UNIQUE(voter_id, battle_id)
 )
 """)
 
 conn.commit()
 
-# ================= BATTLE STATE =================
+# ================= СОСТОЯНИЕ БИТВЫ =================
 
 current_battle = {
     "p1": None,
     "p2": None,
     "v1": 0,
     "v2": 0,
-    "message_id": None
+    "message_id": None,
+    "active": False
 }
 
-# ================= MENU =================
+# ================= МЕНЮ =================
 
 def menu():
     return InlineKeyboardMarkup([
@@ -69,9 +67,8 @@ def menu():
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🔥 <b>БИТВА НИКОВ</b> 🔥\n\n"
-        "Добро пожаловать в турнир!\n\n"
-        f"📢 Канал битв:\n{GROUP_LINK}\n\n"
-        "Выбери действие 👇",
+        "Нажми участвовать — и если вас станет двое,\n"
+        "битва начнётся автоматически 👇",
         parse_mode="HTML",
         reply_markup=menu()
     )
@@ -89,40 +86,15 @@ async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
                    (user.id, username))
     conn.commit()
 
-    await query.answer("✅ Ты участвуешь!", show_alert=True)
+    await query.answer("✅ Ты в игре!", show_alert=True)
 
-# ================= FIND ME =================
+    # Проверяем количество игроков
+    cursor.execute("SELECT user_id FROM players")
+    players = cursor.fetchall()
 
-async def find_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    cursor.execute("SELECT invited FROM players WHERE user_id=?",
-                   (query.from_user.id,))
-    result = cursor.fetchone()
-
-    if not result:
-        await query.answer("❌ Ты не участвуешь", show_alert=True)
-        return
-
-    await query.message.reply_text(f"👤 Приглашено: {result[0]}")
-
-# ================= RULES =================
-
-async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    await query.message.reply_text(
-        "📜 <b>ПРАВИЛА</b>\n\n"
-        "• 1 человек = 1 голос\n"
-        "• Нельзя голосовать несколько раз\n"
-        "• Победитель только один\n"
-        "• Битвы идут параллельно\n"
-        "• В конце награда 50–500 ⭐\n\n"
-        "Бот защищён от накрутки.",
-        parse_mode="HTML"
-    )
+    if len(players) >= 2 and not current_battle["active"]:
+        await asyncio.sleep(1)
+        await create_battle(context)
 
 # ================= CREATE BATTLE =================
 
@@ -132,7 +104,6 @@ async def create_battle(context: ContextTypes.DEFAULT_TYPE):
         players = cursor.fetchall()
 
         if len(players) < 2:
-            logging.info("Недостаточно игроков")
             return
 
         p1_id, p1_name = players[0]
@@ -142,17 +113,16 @@ async def create_battle(context: ContextTypes.DEFAULT_TYPE):
             "p1": p1_id,
             "p2": p2_id,
             "v1": 0,
-            "v2": 0
+            "v2": 0,
+            "active": True
         })
 
         text = (
             "🔥 <b>БИТВА НИКОВ</b> 🔥\n\n"
-            "🏆 Раунд: 1\n"
-            "👥 Участников: 2\n\n"
-            f"{p1_name} VS {p2_name}\n\n"
+            f"{p1_name} 🆚 {p2_name}\n\n"
             "📊 Голоса:\n"
-            "Участник 1: 0\n"
-            "Участник 2: 0\n\n"
+            "1️⃣ 0\n"
+            "2️⃣ 0\n\n"
             "Голосовать 👍 ответом на сообщение"
         )
 
@@ -166,12 +136,15 @@ async def create_battle(context: ContextTypes.DEFAULT_TYPE):
         logging.info("Битва создана")
 
     except Exception as e:
-        logging.error(f"Ошибка создания битвы: {e}")
+        logging.error(f"Ошибка отправки в канал: {e}")
 
 # ================= VOTE =================
 
 async def vote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
+        if not current_battle["active"]:
+            return
+
         if update.message.chat_id != CHANNEL_ID:
             return
 
@@ -186,9 +159,9 @@ async def vote(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         voter = update.message.from_user.id
 
-        # защита от повторного голоса
+        # защита от повторного голосования
         try:
-            cursor.execute("INSERT INTO votes (voter_id, battle_message) VALUES (?,?)",
+            cursor.execute("INSERT INTO votes (voter_id, battle_id) VALUES (?,?)",
                            (voter, current_battle["message_id"]))
             conn.commit()
         except:
@@ -203,10 +176,9 @@ async def vote(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         new_text = (
             "🔥 <b>БИТВА НИКОВ</b> 🔥\n\n"
-            "🏆 Раунд: 1\n"
-            "👥 Участников: 2\n\n"
-            f"Участник 1: {current_battle['v1']}\n"
-            f"Участник 2: {current_battle['v2']}\n\n"
+            f"Голоса:\n"
+            f"1️⃣ {current_battle['v1']}\n"
+            f"2️⃣ {current_battle['v2']}\n\n"
             "Голосовать 👍"
         )
 
@@ -220,21 +192,26 @@ async def vote(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logging.error(f"Ошибка голосования: {e}")
 
-# ================= MAIN =================
+# ================= FIND ME =================
 
-def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+async def find_me(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CallbackQueryHandler(join, pattern="join"))
-    app.add_handler(CallbackQueryHandler(find_me, pattern="me"))
-    app.add_handler(CallbackQueryHandler(rules, pattern="rules"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, vote))
+    cursor.execute("SELECT 1 FROM players WHERE user_id=?",
+                   (query.from_user.id,))
+    result = cursor.fetchone()
 
-    app.job_queue.run_once(create_battle, 15)
+    if result:
+        await query.answer("✅ Ты участвуешь", show_alert=True)
+    else:
+        await query.answer("❌ Ты не участвуешь", show_alert=True)
 
-    print("🚀 БОТ СТАБИЛЬНО ЗАПУЩЕН")
-    app.run_polling(drop_pending_updates=True)
+# ================= RULES =================
 
-if __name__ == "__main__":
-    main()
+async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    await query.message.reply_text(
+        "📜 <b>Правила</b>\
