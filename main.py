@@ -4,7 +4,11 @@ import random
 import logging
 from datetime import datetime, timedelta
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
+)
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -46,14 +50,46 @@ CREATE TABLE IF NOT EXISTS participants (
 
 conn.commit()
 
+# ========= МЕНЮ =========
+
+def main_menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎁 Создать розыгрыш", callback_data="create")],
+        [InlineKeyboardButton("🎉 Участвовать", callback_data="join")],
+        [InlineKeyboardButton("📜 Правила", callback_data="rules")],
+    ])
+
 # ========= START =========
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🎉 Giveaway Bot v2\n\n"
-        "Создать розыгрыш:\n"
-        "/giveaway 30"
+        "🎉 Giveaway Bot\n\nВыберите действие:",
+        reply_markup=main_menu()
     )
+
+# ========= КНОПКИ =========
+
+async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    data = query.data
+
+    if data == "rules":
+        await query.message.reply_text(
+            "📜 Правила:\n\n"
+            "1️⃣ Нужно быть подписанным на канал\n"
+            "2️⃣ Один человек = одна попытка\n"
+            "3️⃣ Победитель выбирается случайно"
+        )
+
+    elif data == "create":
+        await query.message.reply_text(
+            "Чтобы создать розыгрыш, напиши:\n/giveaway 30"
+        )
+
+    elif data == "join":
+        await join_giveaway(query, context)
 
 # ========= СОЗДАНИЕ =========
 
@@ -67,7 +103,7 @@ async def giveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not context.args:
-        await update.message.reply_text("Укажи время в минутах.")
+        await update.message.reply_text("Пример: /giveaway 30")
         return
 
     try:
@@ -83,9 +119,8 @@ async def giveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ])
 
     msg = await update.message.reply_text(
-        f"🎁 РОЗЫГРЫШ\n\n"
-        f"⏳ Закончится через {minutes} минут\n\n"
-        f"Нажми кнопку 👇",
+        f"🎁 РОЗЫГРЫШ!\n\n"
+        f"⏳ Закончится через {minutes} минут",
         reply_markup=keyboard
     )
 
@@ -100,9 +135,7 @@ async def giveaway(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ========= УЧАСТИЕ =========
 
-async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+async def join_giveaway(query, context):
 
     cursor.execute("SELECT active FROM giveaway WHERE id=1")
     row = cursor.fetchone()
@@ -172,13 +205,13 @@ async def check_giveaway(context: ContextTypes.DEFAULT_TYPE):
 # ========= MAIN =========
 
 def main():
-    print("🚀 Giveaway Bot v2 запущен")
+    print("🚀 Бот запущен")
 
     app = ApplicationBuilder().token(TOKEN).build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("giveaway", giveaway))
-    app.add_handler(CallbackQueryHandler(join, pattern="join"))
+    app.add_handler(CallbackQueryHandler(button_handler))
 
     app.job_queue.run_repeating(check_giveaway, 20)
 
