@@ -2,7 +2,7 @@ import os
 import logging
 import sqlite3
 import asyncio
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -14,7 +14,7 @@ from telegram.ext import (
 
 TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = -1003814033445
-ROUND_TIME = 120  # 2 минуты для теста (потом поставишь 7*60*60)
+ROUND_TIME = 120  # Примерное время в секундах для теста (1 раунд 2 минуты)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -68,6 +68,28 @@ CREATE TABLE IF NOT EXISTS votes (
 
 conn.commit()
 
+# ================= СОСТОЯНИЕ БИТВЫ =================
+
+current_battle = {
+    "p1": None,
+    "p2": None,
+    "v1": 0,
+    "v2": 0,
+    "message_id": None,
+    "active": False,
+    "round": 1
+}
+
+# ================= МЕНЮ =================
+
+def menu():
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("⚔️ Участвовать", callback_data="join")],
+        [InlineKeyboardButton("👤 Профиль", callback_data="me")],
+        [InlineKeyboardButton("📩 Пригласить", callback_data="ref")],
+        [InlineKeyboardButton("📜 Правила", callback_data="rules")]
+    ])
+
 # ================= START =================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -78,7 +100,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
                    (user.id, username))
     conn.commit()
 
-    await update.message.reply_text("🔥 Ты зарегистрирован! Используй /join")
+    await update.message.reply_text(
+        "🔥 <b>БИТВА НИКОВ</b> 🔥\n\n"
+        "Добро пожаловать в турнир!\n"
+        "Нажми участвовать 👇",
+        parse_mode="HTML",
+        reply_markup=menu()
+    )
 
 # ================= JOIN =================
 
@@ -138,7 +166,7 @@ async def create_battle(context, battle_id):
 
     text = (
         f"🔥 БИТВА НИКОВ 🔥\n\n"
-        f"🏆 Раунд: 1\n\n"
+        f"🏆 Раунд: {current_battle['round']}\n\n"
         f"{p1_name} 🆚 {p2_name}\n\n"
         "Голосуй 👍 ответом"
     )
@@ -215,6 +243,53 @@ async def vote(update: Update, context: ContextTypes.DEFAULT_TYPE):
         WHERE battle_id=? AND user_id=?
     """, (battle_id, voter))
     conn.commit()
+
+# ================= Профиль =================
+
+async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    cursor.execute("SELECT invited FROM players WHERE user_id=?",
+                   (query.from_user.id,))
+    data = cursor.fetchone()
+
+    if data:
+        await query.message.reply_text(
+            f"👤 Ты пригласил: {data[0]} человек"
+        )
+    else:
+        await query.message.reply_text("Ты ещё не участвуешь.")
+
+# ================= РЕФЕРАЛКА =================
+
+async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    link = f"https://t.me/{context.bot.username}?start={query.from_user.id}"
+
+    await query.message.reply_text(
+        f"📩 Твоя реферальная ссылка:\n{link}\n\n"
+        "1 приглашённый = +1 к счётчику"
+    )
+
+# ================= RULES =================
+
+async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+
+    await query.message.reply_text(
+        "📜 <b>ПРАВИЛА</b>\n\n"
+        "• 1 приглашённый = 1 участник\n"
+        "• Самоприглашение запрещено\n"
+        "• Один человек засчитывается один раз\n"
+        "• Победитель один\n"
+        "• В конце награда 50–500 ⭐\n\n"
+        "Бот защищён от накрутки.",
+        parse_mode="HTML"
+    )
 
 # ================= MAIN =================
 
