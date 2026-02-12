@@ -214,4 +214,27 @@ async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
 
     await query.message.reply_text(
-        "📜 <b>Правила</b>\
+        "📜 <b>Правила</b>\n\n"
+        "• 1 человек = 1 голос\n"
+        "• Двойные голоса запрещены\n"
+        "• Победитель один\n"
+        "• Бот защищён от накрутки",
+        parse_mode="HTML"
+    )
+
+# ================= MAIN =================
+
+def main():
+    app = ApplicationBuilder().token(TOKEN).build()
+
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CallbackQueryHandler(join, pattern="join"))
+    app.add_handler(CallbackQueryHandler(find_me, pattern="me"))
+    app.add_handler(CallbackQueryHandler(rules, pattern="rules"))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, vote))
+
+    print("🚀 ЖЕЛЕЗОБЕТОННЫЙ БОТ ЗАПУЩЕН")
+    app.run_polling(drop_pending_updates=True)
+
+if __name__ == "__main__":
+    main()
