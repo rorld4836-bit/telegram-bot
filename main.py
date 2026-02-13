@@ -1,307 +1,162 @@
-import os
 import logging
+import random
 import sqlite3
-import asyncio
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-    MessageHandler,
-    filters,
-)
+from aiogram import Bot, Dispatcher, executor, types
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = -1003814033445
-ROUND_TIME = 120  # Примерное время в секундах для теста (1 раунд 2 минуты)
+API_TOKEN = "PASTE_YOUR_BOT_TOKEN"
 
 logging.basicConfig(level=logging.INFO)
 
-if not TOKEN:
-    raise ValueError("BOT_TOKEN не найден!")
+bot = Bot(token=API_TOKEN)
+dp = Dispatcher(bot)
 
 # ================= DATABASE =================
 
-conn = sqlite3.connect("battle.db", check_same_thread=False)
+conn = sqlite3.connect("battle.db")
 cursor = conn.cursor()
 
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS players (
+CREATE TABLE IF NOT EXISTS users(
     user_id INTEGER PRIMARY KEY,
     username TEXT,
+    registered INTEGER DEFAULT 0,
+    wins INTEGER DEFAULT 0,
+    votes INTEGER DEFAULT 0,
     invited INTEGER DEFAULT 0
-)
-""")
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS referrals (
-    referrer_id INTEGER,
-    invited_id INTEGER UNIQUE
-)
-""")
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS battles (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    round INTEGER,
-    message_id INTEGER,
-    active INTEGER DEFAULT 1
-)
-""")
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS battle_players (
-    battle_id INTEGER,
-    user_id INTEGER,
-    votes INTEGER DEFAULT 0
-)
-""")
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS votes (
-    voter_id INTEGER,
-    battle_id INTEGER,
-    UNIQUE(voter_id, battle_id)
 )
 """)
 
 conn.commit()
 
-# ================= СОСТОЯНИЕ БИТВЫ =================
+# ================= KEYBOARDS =================
 
-current_battle = {
-    "p1": None,
-    "p2": None,
-    "v1": 0,
-    "v2": 0,
-    "message_id": None,
-    "active": False,
-    "round": 1
-}
-
-# ================= МЕНЮ =================
-
-def menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("⚔️ Участвовать", callback_data="join")],
-        [InlineKeyboardButton("👤 Профиль", callback_data="me")],
-        [InlineKeyboardButton("📩 Пригласить", callback_data="ref")],
-        [InlineKeyboardButton("📜 Правила", callback_data="rules")]
-    ])
+def main_menu():
+    kb = InlineKeyboardMarkup()
+    kb.add(InlineKeyboardButton("🔥 Участвовать", callback_data="join"))
+    kb.add(InlineKeyboardButton("👤 Профиль", callback_data="profile"))
+    kb.add(InlineKeyboardButton("📢 Пригласить друзей", callback_data="ref"))
+    kb.add(InlineKeyboardButton("📜 Правила", callback_data="rules"))
+    return kb
 
 # ================= START =================
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
-    username = user.username if user.username else user.first_name
+@dp.message_handler(commands=["start"])
+async def start(message: types.Message):
+    user_id = message.from_user.id
+    username = message.from_user.username
 
-    cursor.execute("INSERT OR IGNORE INTO players (user_id, username) VALUES (?,?)",
-                   (user.id, username))
+    cursor.execute("INSERT OR IGNORE INTO users(user_id, username) VALUES(?,?)",
+                   (user_id, username))
     conn.commit()
 
-    await update.message.reply_text(
-        "🔥 <b>БИТВА НИКОВ</b> 🔥\n\n"
-        "Добро пожаловать в турнир!\n"
-        "Нажми участвовать 👇",
-        parse_mode="HTML",
-        reply_markup=menu()
+    await message.answer(
+        "🎮 Добро пожаловать в Битву Ников!\n\nВыберите действие:",
+        reply_markup=main_menu()
+    )
+
+# ================= PROFILE =================
+
+@dp.callback_query_handler(lambda c: c.data == "profile")
+async def profile(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+
+    cursor.execute("SELECT wins, votes, invited FROM users WHERE user_id=?",
+                   (user_id,))
+    data = cursor.fetchone()
+
+    await callback.message.edit_text(
+        f"👤 Ваш профиль\n\n"
+        f"🏆 Побед: {data[0]}\n"
+        f"🎤 Голосов: {data[1]}\n"
+        f"👥 Приглашено: {data[2]}",
+        reply_markup=main_menu()
     )
 
 # ================= JOIN =================
 
-async def join(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
+@dp.callback_query_handler(lambda c: c.data == "join")
+async def join(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
 
-    cursor.execute("SELECT COUNT(*) FROM battles WHERE active=1")
-    active = cursor.fetchone()[0]
-
-    if active > 10:
-        await update.message.reply_text("⏳ Слишком много активных битв, подожди")
-        return
-
-    # создаём новую битву
-    cursor.execute("INSERT INTO battles (round) VALUES (1)")
-    battle_id = cursor.lastrowid
-
-    cursor.execute("INSERT INTO battle_players (battle_id, user_id) VALUES (?,?)",
-                   (battle_id, user.id))
+    cursor.execute("UPDATE users SET registered=1 WHERE user_id=?",
+                   (user_id,))
     conn.commit()
 
-    await update.message.reply_text("⏳ Ожидаем второго участника...")
-
-    # проверяем есть ли второй
-    cursor.execute("""
-        SELECT battle_id FROM battle_players
-        GROUP BY battle_id
-        HAVING COUNT(user_id)=2
-        ORDER BY battle_id DESC
-        LIMIT 1
-    """)
-    ready = cursor.fetchone()
-
-    if ready:
-        await create_battle(context, ready[0])
-
-# ================= CREATE BATTLE =================
-
-async def create_battle(context, battle_id):
-    cursor.execute("""
-        SELECT user_id FROM battle_players
-        WHERE battle_id=?
-    """, (battle_id,))
-    players = cursor.fetchall()
-
-    if len(players) != 2:
-        return
-
-    p1 = players[0][0]
-    p2 = players[1][0]
-
-    cursor.execute("SELECT username FROM players WHERE user_id=?", (p1,))
-    p1_name = cursor.fetchone()[0]
-
-    cursor.execute("SELECT username FROM players WHERE user_id=?", (p2,))
-    p2_name = cursor.fetchone()[0]
-
-    text = (
-        f"🔥 БИТВА НИКОВ 🔥\n\n"
-        f"🏆 Раунд: {current_battle['round']}\n\n"
-        f"{p1_name} 🆚 {p2_name}\n\n"
-        "Голосуй 👍 ответом"
+    await callback.answer("Вы зарегистрированы!")
+    await callback.message.edit_text(
+        "✅ Вы участвуете в Битве Ников!\n\n"
+        "Ожидайте начала раунда.",
+        reply_markup=main_menu()
     )
 
-    msg = await context.bot.send_message(CHANNEL_ID, text)
+# ================= REFERRAL =================
 
-    cursor.execute("UPDATE battles SET message_id=? WHERE id=?",
-                   (msg.message_id, battle_id))
-    conn.commit()
+@dp.callback_query_handler(lambda c: c.data == "ref")
+async def ref(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    link = f"https://t.me/YOUR_BOT_USERNAME?start={user_id}"
 
-    asyncio.create_task(round_timer(context, battle_id))
-
-# ================= ROUND TIMER =================
-
-async def round_timer(context, battle_id):
-    await asyncio.sleep(ROUND_TIME)
-
-    cursor.execute("""
-        SELECT user_id, votes FROM battle_players
-        WHERE battle_id=?
-        ORDER BY votes DESC
-    """, (battle_id,))
-    players = cursor.fetchall()
-
-    if len(players) < 2:
-        return
-
-    winner = players[0][0]
-
-    cursor.execute("UPDATE battles SET active=0 WHERE id=?", (battle_id,))
-    conn.commit()
-
-    cursor.execute("SELECT username FROM players WHERE user_id=?", (winner,))
-    name = cursor.fetchone()[0]
-
-    await context.bot.send_message(
-        CHANNEL_ID,
-        f"🏆 Победитель битвы #{battle_id}: {name}"
-    )
-
-# ================= VOTE =================
-
-async def vote(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if update.message.chat_id != CHANNEL_ID:
-        return
-
-    if update.message.text != "👍":
-        return
-
-    reply = update.message.reply_to_message
-    if not reply:
-        return
-
-    cursor.execute("SELECT id FROM battles WHERE message_id=? AND active=1",
-                   (reply.message_id,))
-    battle = cursor.fetchone()
-
-    if not battle:
-        return
-
-    battle_id = battle[0]
-    voter = update.message.from_user.id
-
-    try:
-        cursor.execute("INSERT INTO votes (voter_id, battle_id) VALUES (?,?)",
-                       (voter, battle_id))
-    except:
-        return
-
-    cursor.execute("""
-        UPDATE battle_players
-        SET votes = votes + 1
-        WHERE battle_id=? AND user_id=?
-    """, (battle_id, voter))
-    conn.commit()
-
-# ================= Профиль =================
-
-async def profile(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    cursor.execute("SELECT invited FROM players WHERE user_id=?",
-                   (query.from_user.id,))
-    data = cursor.fetchone()
-
-    if data:
-        await query.message.reply_text(
-            f"👤 Ты пригласил: {data[0]} человек"
-        )
-    else:
-        await query.message.reply_text("Ты ещё не участвуешь.")
-
-# ================= РЕФЕРАЛКА =================
-
-async def referral(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    link = f"https://t.me/{context.bot.username}?start={query.from_user.id}"
-
-    await query.message.reply_text(
-        f"📩 Твоя реферальная ссылка:\n{link}\n\n"
-        "1 приглашённый = +1 к счётчику"
+    await callback.message.edit_text(
+        f"📢 Ваша реферальная ссылка:\n\n{link}\n\n"
+        "За каждого приглашенного вы получаете +1 голос.",
+        reply_markup=main_menu()
     )
 
 # ================= RULES =================
 
-async def rules(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+@dp.callback_query_handler(lambda c: c.data == "rules")
+async def rules(callback: types.CallbackQuery):
+    text = """
+📜 Правила участия в «Битве ников»
 
-    await query.message.reply_text(
-        "📜 <b>ПРАВИЛА</b>\n\n"
-        "• 1 приглашённый = 1 участник\n"
-        "• Самоприглашение запрещено\n"
-        "• Один человек засчитывается один раз\n"
-        "• Победитель один\n"
-        "• В конце награда 50–500 ⭐\n\n"
-        "Бот защищён от накрутки.",
-        parse_mode="HTML"
+1️⃣ Участвуют все зарегистрированные участники.
+2️⃣ Подтвердите участие через кнопку «Участвовать».
+3️⃣ Ники с оскорблениями запрещены.
+4️⃣ Битва проходит в 4 раунда.
+5️⃣ Победитель определяется голосованием.
+6️⃣ Накрутка голосов = дисквалификация.
+7️⃣ Личные данные не сохраняются.
+"""
+    await callback.message.edit_text(text, reply_markup=main_menu())
+
+# ================= START BATTLE =================
+
+@dp.message_handler(commands=["battle"])
+async def start_battle(message: types.Message):
+    cursor.execute("SELECT user_id, username FROM users WHERE registered=1")
+    players = cursor.fetchall()
+
+    if len(players) < 2:
+        await message.answer("Недостаточно участников.")
+        return
+
+    p1, p2 = random.sample(players, 2)
+
+    kb = InlineKeyboardMarkup()
+    kb.add(
+        InlineKeyboardButton(p1[1] or "NoName", callback_data=f"vote_{p1[0]}"),
+        InlineKeyboardButton(p2[1] or "NoName", callback_data=f"vote_{p2[0]}")
     )
 
-# ================= MAIN =================
+    await message.answer(
+        "🔥 Битва ников!\n\nВыберите лучший ник:",
+        reply_markup=kb
+    )
 
-def main():
-    app = ApplicationBuilder().token(TOKEN).build()
+# ================= VOTE =================
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("join", join))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, vote))
+@dp.callback_query_handler(lambda c: c.data.startswith("vote_"))
+async def vote(callback: types.CallbackQuery):
+    winner_id = int(callback.data.split("_")[1])
 
-    print("🚀 PRODUCTION БОТ ЗАПУЩЕН")
-    app.run_polling(drop_pending_updates=True)
+    cursor.execute("UPDATE users SET votes=votes+1 WHERE user_id=?",
+                   (winner_id,))
+    conn.commit()
+
+    await callback.answer("Голос засчитан!")
+
+# ================= RUN =================
 
 if __name__ == "__main__":
-    main()
+    executor.start_polling(dp, skip_updates=True)
