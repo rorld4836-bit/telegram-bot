@@ -1,19 +1,25 @@
 import logging
 import random
 import sqlite3
+import os
 from aiogram import Bot, Dispatcher, executor, types
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-API_TOKEN = "PASTE_YOUR_BOT_TOKEN"
-
 logging.basicConfig(level=logging.INFO)
+
+# ===== TOKEN FROM RAILWAY =====
+API_TOKEN = os.getenv("API_TOKEN")
+BOT_USERNAME = os.getenv("BOT_USERNAME")
+
+if not API_TOKEN:
+    raise ValueError("API_TOKEN не найден! Добавь его в Railway Variables.")
 
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher(bot)
 
 # ================= DATABASE =================
 
-conn = sqlite3.connect("battle.db")
+conn = sqlite3.connect("battle.db", check_same_thread=False)
 cursor = conn.cursor()
 
 cursor.execute("""
@@ -27,7 +33,17 @@ CREATE TABLE IF NOT EXISTS users(
 )
 """)
 
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS votes(
+    voter_id INTEGER,
+    round_id INTEGER
+)
+""")
+
 conn.commit()
+
+current_round = 0
+current_players = []
 
 # ================= KEYBOARDS =================
 
@@ -45,10 +61,22 @@ def main_menu():
 async def start(message: types.Message):
     user_id = message.from_user.id
     username = message.from_user.username
+    args = message.get_args()
 
     cursor.execute("INSERT OR IGNORE INTO users(user_id, username) VALUES(?,?)",
                    (user_id, username))
     conn.commit()
+
+    # ===== Referral =====
+    if args:
+        try:
+            inviter_id = int(args)
+            if inviter_id != user_id:
+                cursor.execute("UPDATE users SET invited=invited+1 WHERE user_id=?",
+                               (inviter_id,))
+                conn.commit()
+        except:
+            pass
 
     await message.answer(
         "🎮 Добро пожаловать в Битву Ников!\n\nВыберите действие:",
@@ -68,7 +96,7 @@ async def profile(callback: types.CallbackQuery):
     await callback.message.edit_text(
         f"👤 Ваш профиль\n\n"
         f"🏆 Побед: {data[0]}\n"
-        f"🎤 Голосов: {data[1]}\n"
+        f"🎤 Голосов получено: {data[1]}\n"
         f"👥 Приглашено: {data[2]}",
         reply_markup=main_menu()
     )
@@ -85,21 +113,24 @@ async def join(callback: types.CallbackQuery):
 
     await callback.answer("Вы зарегистрированы!")
     await callback.message.edit_text(
-        "✅ Вы участвуете в Битве Ников!\n\n"
-        "Ожидайте начала раунда.",
+        "✅ Вы участвуете в Битве Ников!\n\nОжидайте начала раунда.",
         reply_markup=main_menu()
     )
 
-# ================= REFERRAL =================
+# ================= REF =================
 
 @dp.callback_query_handler(lambda c: c.data == "ref")
 async def ref(callback: types.CallbackQuery):
     user_id = callback.from_user.id
-    link = f"https://t.me/YOUR_BOT_USERNAME?start={user_id}"
+
+    if not BOT_USERNAME:
+        link = "Добавь BOT_USERNAME в Railway Variables"
+    else:
+        link = f"https://t.me/{BOT_USERNAME}?start={user_id}"
 
     await callback.message.edit_text(
         f"📢 Ваша реферальная ссылка:\n\n{link}\n\n"
-        "За каждого приглашенного вы получаете +1 голос.",
+        "За каждого приглашенного вы получаете +1 приглашение.",
         reply_markup=main_menu()
     )
 
@@ -108,15 +139,14 @@ async def ref(callback: types.CallbackQuery):
 @dp.callback_query_handler(lambda c: c.data == "rules")
 async def rules(callback: types.CallbackQuery):
     text = """
-📜 Правила участия в «Битве ников»
+📜 Правила участия
 
-1️⃣ Участвуют все зарегистрированные участники.
-2️⃣ Подтвердите участие через кнопку «Участвовать».
-3️⃣ Ники с оскорблениями запрещены.
-4️⃣ Битва проходит в 4 раунда.
-5️⃣ Победитель определяется голосованием.
-6️⃣ Накрутка голосов = дисквалификация.
-7️⃣ Личные данные не сохраняются.
+1️⃣ Участвуют зарегистрированные.
+2️⃣ Подтвердите участие.
+3️⃣ Оскорбления запрещены.
+4️⃣ Битва — 4 раунда.
+5️⃣ Победитель — по голосам.
+6️⃣ Накрутка = дисквалификация.
 """
     await callback.message.edit_text(text, reply_markup=main_menu())
 
@@ -124,6 +154,8 @@ async def rules(callback: types.CallbackQuery):
 
 @dp.message_handler(commands=["battle"])
 async def start_battle(message: types.Message):
+    global current_round, current_players
+
     cursor.execute("SELECT user_id, username FROM users WHERE registered=1")
     players = cursor.fetchall()
 
@@ -131,16 +163,19 @@ async def start_battle(message: types.Message):
         await message.answer("Недостаточно участников.")
         return
 
-    p1, p2 = random.sample(players, 2)
+    current_round += 1
+    current_players = random.sample(players, 2)
 
     kb = InlineKeyboardMarkup()
     kb.add(
-        InlineKeyboardButton(p1[1] or "NoName", callback_data=f"vote_{p1[0]}"),
-        InlineKeyboardButton(p2[1] or "NoName", callback_data=f"vote_{p2[0]}")
+        InlineKeyboardButton(current_players[0][1] or "NoName",
+                             callback_data=f"vote_{current_players[0][0]}"),
+        InlineKeyboardButton(current_players[1][1] or "NoName",
+                             callback_data=f"vote_{current_players[1][0]}")
     )
 
     await message.answer(
-        "🔥 Битва ников!\n\nВыберите лучший ник:",
+        f"🔥 Раунд {current_round}\n\nВыберите лучший ник:",
         reply_markup=kb
     )
 
@@ -148,8 +183,20 @@ async def start_battle(message: types.Message):
 
 @dp.callback_query_handler(lambda c: c.data.startswith("vote_"))
 async def vote(callback: types.CallbackQuery):
+    global current_round
+
+    voter_id = callback.from_user.id
     winner_id = int(callback.data.split("_")[1])
 
+    # Проверка на повторное голосование
+    cursor.execute("SELECT * FROM votes WHERE voter_id=? AND round_id=?",
+                   (voter_id, current_round))
+    if cursor.fetchone():
+        await callback.answer("Вы уже голосовали!", show_alert=True)
+        return
+
+    cursor.execute("INSERT INTO votes(voter_id, round_id) VALUES(?,?)",
+                   (voter_id, current_round))
     cursor.execute("UPDATE users SET votes=votes+1 WHERE user_id=?",
                    (winner_id,))
     conn.commit()
