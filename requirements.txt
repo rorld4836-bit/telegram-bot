@@ -1,1 +1,4 @@
-aiogram==2.25.1
+aiogram==3.4.1
+asyncpg
+SQLAlchemy==2.0.25
+APScheduler
