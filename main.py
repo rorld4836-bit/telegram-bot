@@ -1,209 +1,155 @@
-import logging
-import random
-import sqlite3
 import os
-from aiogram import Bot, Dispatcher, executor, types
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+import asyncio
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import Message
+from aiogram.filters import Command
+from aiogram.utils.keyboard import InlineKeyboardBuilder
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
-logging.basicConfig(level=logging.INFO)
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
-# ===== TOKEN FROM RAILWAY =====
-API_TOKEN = os.getenv("API_TOKEN")
-BOT_USERNAME = os.getenv("BOT_USERNAME")
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
 
-if not API_TOKEN:
-    raise ValueError("API_TOKEN не найден! Добавь его в Railway Variables.")
+# ===== ДАННЫЕ В ПАМЯТИ (MVP версия) =====
 
-bot = Bot(token=API_TOKEN)
-dp = Dispatcher(bot)
+users = {}
+participants = []
+matches = []
+current_round = 1
+registration_open = True
 
-# ================= DATABASE =================
+ROUND_TARGETS = {
+    1: 5,
+    2: 10,
+    3: 20
+}
 
-conn = sqlite3.connect("battle.db", check_same_thread=False)
-cursor = conn.cursor()
+# ===== СТАРТ =====
 
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS users(
-    user_id INTEGER PRIMARY KEY,
-    username TEXT,
-    registered INTEGER DEFAULT 0,
-    wins INTEGER DEFAULT 0,
-    votes INTEGER DEFAULT 0,
-    invited INTEGER DEFAULT 0
-)
-""")
-
-cursor.execute("""
-CREATE TABLE IF NOT EXISTS votes(
-    voter_id INTEGER,
-    round_id INTEGER
-)
-""")
-
-conn.commit()
-
-current_round = 0
-current_players = []
-
-# ================= KEYBOARDS =================
-
-def main_menu():
-    kb = InlineKeyboardMarkup()
-    kb.add(InlineKeyboardButton("🔥 Участвовать", callback_data="join"))
-    kb.add(InlineKeyboardButton("👤 Профиль", callback_data="profile"))
-    kb.add(InlineKeyboardButton("📢 Пригласить друзей", callback_data="ref"))
-    kb.add(InlineKeyboardButton("📜 Правила", callback_data="rules"))
-    return kb
-
-# ================= START =================
-
-@dp.message_handler(commands=["start"])
-async def start(message: types.Message):
+@dp.message(Command("start"))
+async def start_handler(message: Message):
+    args = message.text.split()
     user_id = message.from_user.id
-    username = message.from_user.username
-    args = message.get_args()
 
-    cursor.execute("INSERT OR IGNORE INTO users(user_id, username) VALUES(?,?)",
-                   (user_id, username))
-    conn.commit()
+    if user_id not in users:
+        users[user_id] = {
+            "invites": 0,
+            "invited_by": None,
+            "round_invites": 0,
+            "status": "none"
+        }
 
-    # ===== Referral =====
-    if args:
-        try:
-            inviter_id = int(args)
-            if inviter_id != user_id:
-                cursor.execute("UPDATE users SET invited=invited+1 WHERE user_id=?",
-                               (inviter_id,))
-                conn.commit()
-        except:
-            pass
+    # реферал
+    if len(args) > 1:
+        inviter = int(args[1])
+        if inviter != user_id and inviter in users:
+            users[user_id]["invited_by"] = inviter
+            users[inviter]["invites"] += 1
+            users[inviter]["round_invites"] += 1
+            await check_winner(inviter)
 
-    await message.answer(
-        "🎮 Добро пожаловать в Битву Ников!\n\nВыберите действие:",
-        reply_markup=main_menu()
-    )
-
-# ================= PROFILE =================
-
-@dp.callback_query_handler(lambda c: c.data == "profile")
-async def profile(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-
-    cursor.execute("SELECT wins, votes, invited FROM users WHERE user_id=?",
-                   (user_id,))
-    data = cursor.fetchone()
-
-    await callback.message.edit_text(
-        f"👤 Ваш профиль\n\n"
-        f"🏆 Побед: {data[0]}\n"
-        f"🎤 Голосов получено: {data[1]}\n"
-        f"👥 Приглашено: {data[2]}",
-        reply_markup=main_menu()
-    )
-
-# ================= JOIN =================
-
-@dp.callback_query_handler(lambda c: c.data == "join")
-async def join(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-
-    cursor.execute("UPDATE users SET registered=1 WHERE user_id=?",
-                   (user_id,))
-    conn.commit()
-
-    await callback.answer("Вы зарегистрированы!")
-    await callback.message.edit_text(
-        "✅ Вы участвуете в Битве Ников!\n\nОжидайте начала раунда.",
-        reply_markup=main_menu()
-    )
-
-# ================= REF =================
-
-@dp.callback_query_handler(lambda c: c.data == "ref")
-async def ref(callback: types.CallbackQuery):
-    user_id = callback.from_user.id
-
-    if not BOT_USERNAME:
-        link = "Добавь BOT_USERNAME в Railway Variables"
-    else:
-        link = f"https://t.me/{BOT_USERNAME}?start={user_id}"
-
-    await callback.message.edit_text(
-        f"📢 Ваша реферальная ссылка:\n\n{link}\n\n"
-        "За каждого приглашенного вы получаете +1 приглашение.",
-        reply_markup=main_menu()
-    )
-
-# ================= RULES =================
-
-@dp.callback_query_handler(lambda c: c.data == "rules")
-async def rules(callback: types.CallbackQuery):
-    text = """
-📜 Правила участия
-
-1️⃣ Участвуют зарегистрированные.
-2️⃣ Подтвердите участие.
-3️⃣ Оскорбления запрещены.
-4️⃣ Битва — 4 раунда.
-5️⃣ Победитель — по голосам.
-6️⃣ Накрутка = дисквалификация.
-"""
-    await callback.message.edit_text(text, reply_markup=main_menu())
-
-# ================= START BATTLE =================
-
-@dp.message_handler(commands=["battle"])
-async def start_battle(message: types.Message):
-    global current_round, current_players
-
-    cursor.execute("SELECT user_id, username FROM users WHERE registered=1")
-    players = cursor.fetchall()
-
-    if len(players) < 2:
-        await message.answer("Недостаточно участников.")
-        return
-
-    current_round += 1
-    current_players = random.sample(players, 2)
-
-    kb = InlineKeyboardMarkup()
-    kb.add(
-        InlineKeyboardButton(current_players[0][1] or "NoName",
-                             callback_data=f"vote_{current_players[0][0]}"),
-        InlineKeyboardButton(current_players[1][1] or "NoName",
-                             callback_data=f"vote_{current_players[1][0]}")
-    )
+    link = f"https://t.me/{(await bot.get_me()).username}?start={user_id}"
 
     await message.answer(
-        f"🔥 Раунд {current_round}\n\nВыберите лучший ник:",
-        reply_markup=kb
+        f"🔥 Битва Юзов!\n\n"
+        f"Твоя ссылка:\n{link}\n\n"
+        f"/participate — участвовать"
     )
 
-# ================= VOTE =================
+# ===== УЧАСТИЕ =====
 
-@dp.callback_query_handler(lambda c: c.data.startswith("vote_"))
-async def vote(callback: types.CallbackQuery):
-    global current_round
+@dp.message(Command("participate"))
+async def participate_handler(message: Message):
+    global registration_open
 
-    voter_id = callback.from_user.id
-    winner_id = int(callback.data.split("_")[1])
-
-    # Проверка на повторное голосование
-    cursor.execute("SELECT * FROM votes WHERE voter_id=? AND round_id=?",
-                   (voter_id, current_round))
-    if cursor.fetchone():
-        await callback.answer("Вы уже голосовали!", show_alert=True)
+    if not registration_open:
+        await message.answer("❌ Регистрация закрыта (идёт 2 раунд)")
         return
 
-    cursor.execute("INSERT INTO votes(voter_id, round_id) VALUES(?,?)",
-                   (voter_id, current_round))
-    cursor.execute("UPDATE users SET votes=votes+1 WHERE user_id=?",
-                   (winner_id,))
-    conn.commit()
+    user_id = message.from_user.id
 
-    await callback.answer("Голос засчитан!")
+    if user_id not in participants:
+        participants.append(user_id)
+        users[user_id]["status"] = "waiting"
+        await message.answer("✅ Ты участвуешь в турнире!")
 
-# ================= RUN =================
+        await try_create_match()
+
+# ===== СОЗДАНИЕ МАТЧЕЙ =====
+
+async def try_create_match():
+    waiting = [u for u in participants if users[u]["status"] == "waiting"]
+
+    if len(waiting) >= 2:
+        p1 = waiting[0]
+        p2 = waiting[1]
+
+        users[p1]["status"] = "fighting"
+        users[p2]["status"] = "fighting"
+
+        matches.append((p1, p2, current_round))
+
+        await post_match(p1, p2)
+
+async def post_match(p1, p2):
+    text = (
+        f"⚔ Раунд {current_round}\n"
+        f"До {ROUND_TARGETS[current_round]} приглашённых\n\n"
+        f"{p1}: 0/{ROUND_TARGETS[current_round]}\n"
+        f"🆚\n"
+        f"{p2}: 0/{ROUND_TARGETS[current_round]}"
+    )
+
+    await bot.send_message(CHANNEL_ID, text)
+
+# ===== ПРОВЕРКА ПОБЕДЫ =====
+
+async def check_winner(user_id):
+    global current_round, registration_open
+
+    if users[user_id]["round_invites"] >= ROUND_TARGETS[current_round]:
+
+        users[user_id]["status"] = "advanced"
+        users[user_id]["round_invites"] = 0
+
+        await bot.send_message(
+            CHANNEL_ID,
+            f"🏆 {user_id} проходит в следующий раунд!"
+        )
+
+        # переход во 2 раунд
+        if current_round == 1:
+            current_round = 2
+            registration_open = False
+            await bot.send_message(CHANNEL_ID, "🔒 Регистрация закрыта!")
+
+        elif current_round == 2:
+            current_round = 3
+
+        elif current_round == 3:
+            await bot.send_message(
+                CHANNEL_ID,
+                f"👑 {user_id} ПОБЕДИТЕЛЬ ТУРНИРА!"
+            )
+
+# ===== АВТОСТАРТ =====
+
+async def start_tournament():
+    global current_round, registration_open
+    current_round = 1
+    registration_open = True
+    await bot.send_message(CHANNEL_ID, "🔥 Новый турнир начался!")
+
+scheduler = AsyncIOScheduler()
+scheduler.add_job(start_tournament, "interval", hours=24)
+scheduler.start()
+
+# ===== ЗАПУСК =====
+
+async def main():
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    executor.start_polling(dp, skip_updates=True)
+    asyncio.run(main())
