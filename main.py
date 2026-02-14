@@ -3,17 +3,16 @@ import asyncio
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
 from aiogram.filters import Command
-from aiogram.utils.keyboard import InlineKeyboardBuilder
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+# ====== ПЕРЕМЕННЫЕ ОКРУЖЕНИЯ ======
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-# ===== ДАННЫЕ В ПАМЯТИ (MVP версия) =====
-
+# ====== ДАННЫЕ (MVP, без БД) ======
 users = {}
 participants = []
 matches = []
@@ -26,8 +25,7 @@ ROUND_TARGETS = {
     3: 20
 }
 
-# ===== СТАРТ =====
-
+# ====== /start ======
 @dp.message(Command("start"))
 async def start_handler(message: Message):
     args = message.text.split()
@@ -41,16 +39,20 @@ async def start_handler(message: Message):
             "status": "none"
         }
 
-    # реферал
+    # реферальная система
     if len(args) > 1:
-        inviter = int(args[1])
-        if inviter != user_id and inviter in users:
-            users[user_id]["invited_by"] = inviter
-            users[inviter]["invites"] += 1
-            users[inviter]["round_invites"] += 1
-            await check_winner(inviter)
+        try:
+            inviter = int(args[1])
+            if inviter != user_id and inviter in users:
+                users[user_id]["invited_by"] = inviter
+                users[inviter]["invites"] += 1
+                users[inviter]["round_invites"] += 1
+                await check_winner(inviter)
+        except:
+            pass
 
-    link = f"https://t.me/{(await bot.get_me()).username}?start={user_id}"
+    bot_info = await bot.get_me()
+    link = f"https://t.me/{bot_info.username}?start={user_id}"
 
     await message.answer(
         f"🔥 Битва Юзов!\n\n"
@@ -58,8 +60,7 @@ async def start_handler(message: Message):
         f"/participate — участвовать"
     )
 
-# ===== УЧАСТИЕ =====
-
+# ====== /participate ======
 @dp.message(Command("participate"))
 async def participate_handler(message: Message):
     global registration_open
@@ -74,11 +75,9 @@ async def participate_handler(message: Message):
         participants.append(user_id)
         users[user_id]["status"] = "waiting"
         await message.answer("✅ Ты участвуешь в турнире!")
-
         await try_create_match()
 
-# ===== СОЗДАНИЕ МАТЧЕЙ =====
-
+# ====== СОЗДАНИЕ МАТЧЕЙ ======
 async def try_create_match():
     waiting = [u for u in participants if users[u]["status"] == "waiting"]
 
@@ -104,8 +103,7 @@ async def post_match(p1, p2):
 
     await bot.send_message(CHANNEL_ID, text)
 
-# ===== ПРОВЕРКА ПОБЕДЫ =====
-
+# ====== ПРОВЕРКА ПОБЕДЫ ======
 async def check_winner(user_id):
     global current_round, registration_open
 
@@ -119,7 +117,6 @@ async def check_winner(user_id):
             f"🏆 {user_id} проходит в следующий раунд!"
         )
 
-        # переход во 2 раунд
         if current_round == 1:
             current_round = 2
             registration_open = False
@@ -134,8 +131,7 @@ async def check_winner(user_id):
                 f"👑 {user_id} ПОБЕДИТЕЛЬ ТУРНИРА!"
             )
 
-# ===== АВТОСТАРТ =====
-
+# ====== АВТОСТАРТ ТУРНИРА ======
 async def start_tournament():
     global current_round, registration_open
     current_round = 1
@@ -146,8 +142,7 @@ scheduler = AsyncIOScheduler()
 scheduler.add_job(start_tournament, "interval", hours=24)
 scheduler.start()
 
-# ===== ЗАПУСК =====
-
+# ====== ЗАПУСК ======
 async def main():
     await dp.start_polling(bot)
 
