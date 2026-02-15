@@ -16,12 +16,15 @@ from sqlalchemy import Column, Integer, BigInteger, String, Boolean, select
 # =========================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = -1003814033445   # <-- ТВОЙ КАНАЛ
+CHANNEL_ID = -1003814033445
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://")
+    DATABASE_URL = DATABASE_URL.replace(
+        "postgres://",
+        "postgresql+asyncpg://"
+    )
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
@@ -76,7 +79,9 @@ async def init_db():
 # =========================
 
 async def get_active_tournament(session):
-    result = await session.execute(select(Tournament).where(Tournament.active == True))
+    result = await session.execute(
+        select(Tournament).where(Tournament.active == True)
+    )
     return result.scalars().first()
 
 
@@ -85,7 +90,11 @@ async def create_tournament():
         t = Tournament()
         session.add(t)
         await session.commit()
-        await bot.send_message(CHANNEL_ID, "🔥 Новый турнир начался!")
+
+        await bot.send_message(
+            CHANNEL_ID,
+            "🔥 Новый турнир начался!"
+        )
 
 
 async def check_winner(session, participant, tournament):
@@ -100,12 +109,13 @@ async def check_winner(session, participant, tournament):
             f"🏆 {participant.user_id} прошёл раунд {tournament.current_round}"
         )
 
-        await session.commit()
-
         if tournament.current_round == 1:
             tournament.current_round = 2
             tournament.registration_open = False
-            await bot.send_message(CHANNEL_ID, "🔒 Регистрация закрыта!")
+            await bot.send_message(
+                CHANNEL_ID,
+                "🔒 Регистрация закрыта!"
+            )
 
         elif tournament.current_round == 2:
             tournament.current_round = 3
@@ -156,7 +166,11 @@ async def start_handler(message: Message):
                             participant = result.scalars().first()
                             if participant:
                                 participant.round_invites += 1
-                                await check_winner(session, participant, tournament)
+                                await check_winner(
+                                    session,
+                                    participant,
+                                    tournament
+                                )
 
                         await session.commit()
             except:
@@ -194,21 +208,20 @@ async def participate_handler(message: Message):
         await message.answer("✅ Ты участвуешь в турнире!")
 
 # =========================
-# AUTO START
-# =========================
-
-scheduler = AsyncIOScheduler()
-scheduler.add_job(create_tournament, "interval", hours=24)
-scheduler.start()
-
-# =========================
 # MAIN
 # =========================
 
 async def main():
     await init_db()
+
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(create_tournament, "interval", hours=24)
+    scheduler.start()
+
     await create_tournament()
+
     await dp.start_polling(bot)
+
 
 if __name__ == "__main__":
     asyncio.run(main())
