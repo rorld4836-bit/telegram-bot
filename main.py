@@ -24,7 +24,6 @@ ADMIN_ID = 6885494136
 ROUND_TARGETS = {1: 5, 2: 10, 3: 20}
 MSK = pytz.timezone("Europe/Moscow")
 
-# --- FIX RAILWAY POSTGRES ---
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
 elif DATABASE_URL.startswith("postgresql://"):
@@ -44,7 +43,7 @@ class User(Base):
     id = Column(BigInteger, primary_key=True)
     invited_by = Column(BigInteger, nullable=True)
     total_invites = Column(Integer, default=0)
-    is_pro = Column(Boolean, default=True)  # включил участие всем
+    is_pro = Column(Boolean, default=True)
 
 
 class Tournament(Base):
@@ -106,7 +105,6 @@ async def start_handler(message: Message):
                 if inviter:
                     inviter.total_invites += 1
 
-                    # засчитываем в текущем раунде
                     result = await session.execute(
                         select(Participant).where(
                             Participant.user_id == invited_by
@@ -140,6 +138,19 @@ async def participate(callback):
             await callback.message.answer("❌ Турнир не активен")
             return
 
+        # Проверка — уже участвует в этом раунде
+        result = await session.execute(
+            select(Participant).where(
+                Participant.user_id == user_id,
+                Participant.round_number == tournament.current_round
+            )
+        )
+        existing = result.scalars().first()
+
+        if existing:
+            await callback.message.answer("⚠️ Ты уже участвуешь в этом раунде!")
+            return
+
         participant = Participant(
             user_id=user_id,
             round_number=tournament.current_round
@@ -165,7 +176,8 @@ async def rules(callback):
         "📖 Правила:\n\n"
         "1. Приглашай людей через свою ссылку\n"
         "2. Кто больше пригласит — проходит дальше\n"
-        "3. Итог каждого раунда в 14:00 МСК"
+        "3. Раунд завершается автоматически в 14:00 МСК\n"
+        "4. Минимум 2 участника для старта раунда"
     )
 
 # ================= ROUND LOGIC =================
@@ -187,22 +199,34 @@ async def finish_round():
         )
         players = result.scalars().all()
 
+        # 🔥 минимум 2 участника
         if len(players) < 2:
+            await bot.send_message(
+                CHANNEL_ID,
+                f"⚠️ Раунд {tournament.current_round} не может завершиться.\n"
+                f"Недостаточно участников (минимум 2)."
+            )
             return
 
         players = sorted(players, key=lambda x: x.round_invites, reverse=True)
-
         winner = players[0]
 
         await bot.send_message(
             CHANNEL_ID,
             f"👑 Раунд {tournament.current_round} завершён!\n\n"
-            f"Победитель: {winner.user_id}\n"
-            f"Приглашений: {winner.round_invites}"
+            f"🏆 Победитель: {winner.user_id}\n"
+            f"📨 Приглашений: {winner.round_invites}"
         )
 
+        # авто-переключение
         tournament.current_round += 1
         await session.commit()
+
+        await bot.send_message(
+            CHANNEL_ID,
+            f"🚀 Начался раунд {tournament.current_round}!\n"
+            f"Нажмите «Участвовать», чтобы вступить."
+        )
 
 # ================= ADMIN =================
 
