@@ -1,5 +1,4 @@
 aiogram==3.4.1
 SQLAlchemy==2.0.25
-APScheduler
-psycopg2-binary
-asyncpg
+APScheduler==3.10.4
+asyncpg==0.29.0
