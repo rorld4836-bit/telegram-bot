@@ -16,7 +16,8 @@ from sqlalchemy import Column, Integer, BigInteger, String, Boolean, select
 # =========================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-CHANNEL_ID = int(os.getenv("CHANNEL_ID"))
+CHANNEL_ID = -1003814033445   # <-- ТВОЙ КАНАЛ
+
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if DATABASE_URL.startswith("postgres://"):
@@ -57,7 +58,7 @@ class Participant(Base):
     user_id = Column(BigInteger)
     round_number = Column(Integer)
     round_invites = Column(Integer, default=0)
-    status = Column(String, default="waiting")  # waiting, fighting, eliminated, advanced
+    status = Column(String, default="waiting")
 
 
 ROUND_TARGETS = {1: 5, 2: 10, 3: 20}
@@ -101,7 +102,6 @@ async def check_winner(session, participant, tournament):
 
         await session.commit()
 
-        # переход раунда
         if tournament.current_round == 1:
             tournament.current_round = 2
             tournament.registration_open = False
@@ -136,7 +136,6 @@ async def start_handler(message: Message):
             session.add(user)
             await session.commit()
 
-        # реферал
         if len(args) > 1:
             try:
                 inviter_id = int(args[1])
@@ -146,7 +145,6 @@ async def start_handler(message: Message):
                         user.invited_by = inviter_id
                         inviter.total_invites += 1
 
-                        # добавляем в текущий раунд
                         tournament = await get_active_tournament(session)
                         if tournament:
                             result = await session.execute(
