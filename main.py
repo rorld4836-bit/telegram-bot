@@ -20,9 +20,19 @@ CHANNEL_ID = -1003814033445
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
+if not DATABASE_URL:
+    raise ValueError("DATABASE_URL not found!")
+
+# 👇 ВАЖНО: переводим в asyncpg
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace(
         "postgres://",
+        "postgresql+asyncpg://"
+    )
+
+if DATABASE_URL.startswith("postgresql://"):
+    DATABASE_URL = DATABASE_URL.replace(
+        "postgresql://",
         "postgresql+asyncpg://"
     )
 
@@ -106,7 +116,7 @@ async def check_winner(session, participant, tournament):
 
         await bot.send_message(
             CHANNEL_ID,
-            f"🏆 {participant.user_id} прошёл раунд {tournament.current_round}"
+            f"🏆 Пользователь {participant.user_id} прошёл раунд {tournament.current_round}"
         )
 
         if tournament.current_round == 1:
@@ -123,7 +133,7 @@ async def check_winner(session, participant, tournament):
         elif tournament.current_round == 3:
             await bot.send_message(
                 CHANNEL_ID,
-                f"👑 {participant.user_id} ПОБЕДИТЕЛЬ ТУРНИРА!"
+                f"👑 Пользователь {participant.user_id} ПОБЕДИТЕЛЬ ТУРНИРА!"
             )
             tournament.active = False
 
@@ -219,6 +229,8 @@ async def main():
     scheduler.start()
 
     await create_tournament()
+
+    print("✅ Bot started successfully")
 
     await dp.start_polling(bot)
 
