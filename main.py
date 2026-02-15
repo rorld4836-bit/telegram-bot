@@ -10,7 +10,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import declarative_base, sessionmaker
-from sqlalchemy import Column, Integer, BigInteger, String, Boolean, select
+from sqlalchemy import Column, Integer, BigInteger, Boolean, select
 
 # ================= CONFIG =================
 
@@ -21,7 +21,6 @@ CHANNEL_ID = -1003814033445
 CHANNEL_LINK = "https://t.me/battlertf"
 ADMIN_ID = 6885494136
 
-ROUND_TARGETS = {1: 5, 2: 10, 3: 20}
 MSK = pytz.timezone("Europe/Moscow")
 
 if DATABASE_URL.startswith("postgres://"):
@@ -138,7 +137,7 @@ async def participate(callback):
             await callback.message.answer("❌ Турнир не активен")
             return
 
-        # Проверка — уже участвует в этом раунде
+        # Проверка — уже участвует
         result = await session.execute(
             select(Participant).where(
                 Participant.user_id == user_id,
@@ -151,6 +150,7 @@ async def participate(callback):
             await callback.message.answer("⚠️ Ты уже участвуешь в этом раунде!")
             return
 
+        # Добавляем игрока
         participant = Participant(
             user_id=user_id,
             round_number=tournament.current_round
@@ -159,6 +159,24 @@ async def participate(callback):
         await session.commit()
 
         await callback.message.answer("✅ Ты участвуешь!")
+
+        # Проверяем сколько игроков в раунде
+        result = await session.execute(
+            select(Participant).where(
+                Participant.round_number == tournament.current_round
+            )
+        )
+        players = result.scalars().all()
+
+        # 🔥 Если стало 2 — стартуем сразу
+        if len(players) >= 2:
+            await bot.send_message(
+                CHANNEL_ID,
+                f"⚔️ В раунде {tournament.current_round} набралось 2 игрока!\n"
+                f"Битва начинается!"
+            )
+
+            await finish_round()
 
 # ================= INVITE =================
 
@@ -176,8 +194,8 @@ async def rules(callback):
         "📖 Правила:\n\n"
         "1. Приглашай людей через свою ссылку\n"
         "2. Кто больше пригласит — проходит дальше\n"
-        "3. Раунд завершается автоматически в 14:00 МСК\n"
-        "4. Минимум 2 участника для старта раунда"
+        "3. Минимум 2 участника для старта раунда\n"
+        "4. Если набралось 2 игрока — раунд начинается сразу"
     )
 
 # ================= ROUND LOGIC =================
@@ -199,13 +217,7 @@ async def finish_round():
         )
         players = result.scalars().all()
 
-        # 🔥 минимум 2 участника
         if len(players) < 2:
-            await bot.send_message(
-                CHANNEL_ID,
-                f"⚠️ Раунд {tournament.current_round} не может завершиться.\n"
-                f"Недостаточно участников (минимум 2)."
-            )
             return
 
         players = sorted(players, key=lambda x: x.round_invites, reverse=True)
@@ -218,7 +230,6 @@ async def finish_round():
             f"📨 Приглашений: {winner.round_invites}"
         )
 
-        # авто-переключение
         tournament.current_round += 1
         await session.commit()
 
